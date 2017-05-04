@@ -85,7 +85,7 @@ import qualified System.Logger.Class  as Log
 newtype ResultSet a = ResultSet { page :: Page a }
 
 schemaVersion :: Int32
-schemaVersion = 20
+schemaVersion = 21
 
 -- | Get conversation by ID.
 conversation :: (MonadBaseControl IO m, MonadClient m, Forall (Pure m))
