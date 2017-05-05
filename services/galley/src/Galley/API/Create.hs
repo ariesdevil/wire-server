@@ -52,7 +52,7 @@ createGroupConversation (zusr::: zcon ::: req ::: _) = do
   where
     fun j uids = do
         n <- rangeCheckedMaybe (newConvName j)
-        c <- Data.createConversation zusr n (access j) uids
+        c <- Data.createConversation zusr n (access j) uids (newConvTeam j)
         notifyCreatedConversation zusr (Just zcon) c
         conversationResponse status201 zusr c
 

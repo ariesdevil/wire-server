@@ -17,6 +17,7 @@ module Galley.Types
     , OtrRecipients    (..)
     , foldrOtrRecipients
     , OtrFilterMissing (..)
+    , ConvTeamInfo     (..)
 
       -- * Events
     , Event            (..)
@@ -73,6 +74,12 @@ data Conversation = Conversation
     , cnvAccess    :: !(List1 Access)
     , cnvName      :: !(Maybe Text)
     , cnvMembers   :: !ConvMembers
+    , cnvTeam      :: !(Maybe ConvTeamInfo)
+    } deriving (Eq, Show)
+
+data ConvTeamInfo = ConvTeamInfo
+    { cnvTeamId  :: !TeamId
+    , cnvManaged :: !Bool
     } deriving (Eq, Show)
 
 data ConvType
@@ -99,6 +106,7 @@ data ConversationMeta = ConversationMeta
     , cmCreator :: !UserId
     , cmAccess  :: !(List1 Access)
     , cmName    :: !(Maybe Text)
+    , cmTeam    :: !(Maybe ConvTeamInfo)
     } deriving (Eq, Show)
 
 data ConversationList a = ConversationList
@@ -117,6 +125,7 @@ data NewConv = NewConv
     { newConvUsers  :: ![UserId]
     , newConvName   :: !(Maybe Text)
     , newConvAccess :: !(Set Access)
+    , newConvTeam   :: !(Maybe ConvTeamInfo)
     }
 
 deriving instance Eq   NewConv
@@ -433,16 +442,18 @@ instance ToJSON Conversation where
         , "members" .= cnvMembers c
         , "last_event"      .= ("0.0" :: Text)
         , "last_event_time" .= ("1970-01-01T00:00:00.000Z" :: Text)
+        , "team"    .= cnvTeam c
         ]
 
 instance FromJSON Conversation where
    parseJSON = withObject "conversation" $ \o ->
-       Conversation <$> o .: "id"
-                    <*> o .: "type"
-                    <*> o .: "creator"
-                    <*> o .: "access"
-                    <*> o .: "name"
-                    <*> o .: "members"
+       Conversation <$> o .:  "id"
+                    <*> o .:  "type"
+                    <*> o .:  "creator"
+                    <*> o .:  "access"
+                    <*> o .:? "name"
+                    <*> o .:  "members"
+                    <*> o .:? "team"
 
 instance ToJSON ConvMembers where
    toJSON mm = object
@@ -521,13 +532,25 @@ instance FromJSON NewConv where
         NewConv <$> i .:  "users"
                 <*> i .:? "name"
                 <*> i .:? "access" .!= mempty
+                <*> i .:? "team"
 
 instance ToJSON NewConv where
     toJSON i = object
-        [ "users"  .= newConvUsers i
-        , "name"   .= newConvName i
-        , "access" .= newConvAccess i
+        $ "users"  .= newConvUsers i
+        # "name"   .= newConvName i
+        # "access" .= newConvAccess i
+        # "team"   .= newConvTeam i
+        # []
+
+instance ToJSON ConvTeamInfo where
+    toJSON c = object
+        [ "teamid"   .= cnvTeamId c
+        , "managed"  .= cnvManaged c
         ]
+
+instance FromJSON ConvTeamInfo where
+    parseJSON = withObject "conversation team info" $ \o ->
+        ConvTeamInfo <$> o .: "teamid" <*> o .: "managed"
 
 instance FromJSON Invite where
     parseJSON = withObject "invite object"
@@ -538,20 +561,22 @@ instance ToJSON Invite where
 
 instance FromJSON ConversationMeta where
     parseJSON = withObject "conversation-meta" $ \o ->
-        ConversationMeta <$> o .: "id"
-                         <*> o .: "type"
-                         <*> o .: "creator"
-                         <*> o .: "access"
-                         <*> o .: "name"
+        ConversationMeta <$> o .:  "id"
+                         <*> o .:  "type"
+                         <*> o .:  "creator"
+                         <*> o .:  "access"
+                         <*> o .:  "name"
+                         <*> o .:? "team"
 
 instance ToJSON ConversationMeta where
     toJSON c = object
-        [ "id"      .= cmId c
-        , "type"    .= cmType c
-        , "creator" .= cmCreator c
-        , "access"  .= cmAccess c
-        , "name"    .= cmName c
-        ]
+        $ "id"      .= cmId c
+        # "type"    .= cmType c
+        # "creator" .= cmCreator c
+        # "access"  .= cmAccess c
+        # "name"    .= cmName c
+        # "team"    .= cmTeam c
+        # []
 
 instance FromJSON ConversationRename where
     parseJSON = withObject "conversation-rename object" $ \c ->

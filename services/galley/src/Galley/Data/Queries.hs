@@ -14,19 +14,58 @@ import Data.Monoid
 import Data.Text (Text)
 import Galley.Types hiding (Conversation)
 import Galley.Types.Bot
+import Galley.Types.Teams
 
 import qualified Data.Text.Lazy as LT
 
+-- Teams --------------------------------------------------------------------
+
+selectTeam :: PrepQuery R (Identity TeamId) (UserId, Text, Text, Maybe Text)
+selectTeam = "select creator, name, icon, icon_key from team where team = ?"
+
+selectTeamConvs :: PrepQuery R (Identity TeamId) (Identity ConvId)
+selectTeamConvs = "select conv from team_conv where team = ? order by conv"
+
+selectTeamMembers :: PrepQuery R (Identity TeamId) (UserId, Permissions)
+selectTeamMembers = "select user, perms from team_member where team = ? order by user"
+
+selectUserTeams :: PrepQuery R (Identity UserId) (Identity TeamId)
+selectUserTeams = "select team from user_team where user = ? order by team"
+
+insertTeam :: PrepQuery W (TeamId, UserId, Text, Text, Maybe Text) ()
+insertTeam = "insert into team (team, creator, name, icon, icon_key) values (?, ?, ?, ?, ?)"
+
+insertTeamConv :: PrepQuery W (TeamId, ConvId) ()
+insertTeamConv = "insert into team_conv (team, conv) values (?, ?)"
+
+deleteTeamConv :: PrepQuery W (TeamId, ConvId) ()
+deleteTeamConv = "delete from team_conv where team = ? and conv = ?"
+
+insertTeamMember :: PrepQuery W (TeamId, UserId, Permissions) ()
+insertTeamMember = "insert into team_member (team, user, perms) values (?, ?, ?)"
+
+removeTeamMember :: PrepQuery W (TeamId, UserId) ()
+removeTeamMember = "delete from team_member where team = ? and user = ?"
+
+updatePermissions :: PrepQuery W (Permissions, TeamId, UserId) ()
+updatePermissions = "update team_member set perms = ? where team = ? and user = ?"
+
+insertUserTeam :: PrepQuery W (UserId, TeamId) ()
+insertUserTeam = "insert into user_team (user, team) values (?, ?)"
+
+deleteUserTeam :: PrepQuery W (UserId, TeamId) ()
+deleteUserTeam = "delete from user_team where user = ? and team = ?"
+
 -- Conversations ------------------------------------------------------------
 
-selectConv :: PrepQuery R (Identity ConvId) (ConvType, UserId, Maybe (Set Access), Maybe Text)
-selectConv = "select type, creator, access, name from conversation where conv = ?"
+selectConv :: PrepQuery R (Identity ConvId) (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe ConvTeamInfo)
+selectConv = "select type, creator, access, name, team from conversation where conv = ?"
 
-selectConvs :: PrepQuery R (Identity [ConvId]) (ConvId, ConvType, UserId, Maybe (Set Access), Maybe Text)
-selectConvs = "select conv, type, creator, access, name from conversation where conv in ?"
+selectConvs :: PrepQuery R (Identity [ConvId]) (ConvId, ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe ConvTeamInfo)
+selectConvs = "select conv, type, creator, access, name, team from conversation where conv in ?"
 
-insertConv :: PrepQuery W (ConvId, ConvType, UserId, Set Access, Maybe Text) ()
-insertConv = "insert into conversation (conv, type, creator, access, name) values (?, ?, ?, ?, ?)"
+insertConv :: PrepQuery W (ConvId, ConvType, UserId, Set Access, Maybe Text, Maybe ConvTeamInfo) ()
+insertConv = "insert into conversation (conv, type, creator, access, name, team) values (?, ?, ?, ?, ?, ?)"
 
 updateConvName :: PrepQuery W (Text, ConvId) ()
 updateConvName = "update conversation set name = ? where conv = ?"
@@ -49,7 +88,7 @@ insertUserConv :: PrepQuery W (UserId, ConvId) ()
 insertUserConv = "insert into user (user, conv) values (?, ?)"
 
 deleteUserConv :: PrepQuery W (UserId, ConvId) ()
-deleteUserConv = "delete from user where user = ? and conv =  ?"
+deleteUserConv = "delete from user where user = ? and conv = ?"
 
 -- Members ------------------------------------------------------------------
 

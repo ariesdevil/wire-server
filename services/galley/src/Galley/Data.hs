@@ -12,6 +12,7 @@ module Galley.Data
     , schemaVersion
 
       -- * Write
+    , createTeam
     , createConversation
     , createSelfConversation
     , createOne2OneConversation
@@ -19,6 +20,7 @@ module Galley.Data
     , updateConversation
     , updateMember
     , addMembers
+    , addTeamMember
     , rmMembers
     , deleteMember
     , acceptConnect
@@ -26,6 +28,9 @@ module Galley.Data
     , eraseClients
 
       -- * Read
+    , team
+    , teamMembers
+    , teamConversationIds
     , conversation
     , conversationMeta
     , conversations
@@ -34,6 +39,7 @@ module Galley.Data
     , member
     , members
     , lookupClients
+    , userTeamIds
 
       -- * Utilities
     , one2OneConvId
@@ -44,12 +50,12 @@ import Cassandra
 import Control.Applicative
 import Control.Arrow (second)
 import Control.Concurrent.Async.Lifted.Safe
+import Control.Lens hiding ((<|))
 import Control.Monad (join)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Control
 import Data.ByteString.Conversion hiding (parser)
 import Data.Foldable (toList, foldrM, for_)
-import Data.Functor.Identity
 import Data.Id
 import Data.Range
 import Data.List1 (List1, list1, singleton)
@@ -65,6 +71,7 @@ import Galley.Data.Instances ()
 import Galley.Types hiding (Conversation)
 import Galley.Types.Bot (newServiceRef)
 import Galley.Types.Clients (Clients)
+import Galley.Types.Teams
 import Prelude hiding (max)
 import System.Logger.Class (MonadLogger)
 import System.Logger.Message (msg, (+++), val)
@@ -106,7 +113,7 @@ conversations ids = do
   where
     fetchConvs = do
         cs <- retry x1 $ query selectConvs (params Quorum (Identity ids))
-        let m = Map.fromList $ map (\(c,t,u,n,a) -> (c, (t,u,n,a))) cs
+        let m = Map.fromList $ map (\(c,t,u,n,a,i) -> (c, (t,u,n,a,i))) cs
         return $ map (`Map.lookup` m) ids
 
     flatten (i, c) cc = case c of
@@ -120,7 +127,7 @@ conversationMeta :: MonadClient m => ConvId -> m (Maybe ConversationMeta)
 conversationMeta conv = fmap toConvMeta <$>
     retry x1 (query1 selectConv (params Quorum (Identity conv)))
   where
-    toConvMeta (t, c, a, n) = ConversationMeta conv t c (defAccess t a) n
+    toConvMeta (t, c, a, n, i) = ConversationMeta conv t c (defAccess t a) n i
 
 -- | Get a set of conversation IDs (optionally starting from the given ID).
 conversationIdsFrom :: MonadClient m => UserId -> Maybe ConvId -> Range 1 1000 Int32 -> m (ResultSet ConvId)
@@ -157,23 +164,70 @@ memberLists convs = do
 members :: MonadClient m => ConvId -> m [Member]
 members conv = join <$> memberLists [conv]
 
-createConversation :: UserId -> Maybe (Range 1 256 Text) -> List1 Access -> Range 0 64 [UserId] -> Galley Conversation
-createConversation usr name acc others = do
+team :: MonadClient m => TeamId -> m (Maybe Team)
+team t =
+    fmap toTeam <$> retry x1 (query1 selectTeam (params Quorum (Identity t)))
+  where
+    toTeam (u, n, i, k) = newTeam t u n i & teamIconKey .~ k
+
+teamConversationIds :: MonadClient m => TeamId -> m [ConvId]
+teamConversationIds t = map runIdentity <$>
+    retry x1 (query selectTeamConvs (params Quorum (Identity t)))
+
+teamMembers :: MonadClient m => TeamId -> m [TeamMember]
+teamMembers t = map (uncurry newTeamMember) <$>
+    retry x1 (query selectTeamMembers (params Quorum (Identity t)))
+
+userTeamIds :: MonadClient m => UserId -> m [TeamId]
+userTeamIds u = map runIdentity <$>
+    retry x1 (query selectUserTeams (params Quorum (Identity u)))
+
+
+createTeam :: MonadClient m
+           => UserId
+           -> Range 1 256 Text
+           -> Range 1 256 Text
+           -> Maybe (Range 1 256 Text)
+           -> m Team
+createTeam uid (fromRange -> n) (fromRange -> i) k = do
+    tid <- Id <$> liftIO nextRandom
+    retry x5 $
+        write insertTeam (params Quorum (tid, uid, n, i, fromRange <$> k))
+    pure (newTeam tid uid n i & teamIconKey .~ (fromRange <$> k))
+
+addTeamMember :: MonadClient m => TeamId -> UserId -> Permissions -> m TeamMember
+addTeamMember tid uid ps = do
+    retry x5 $
+        write insertTeamMember (params Quorum (tid, uid, ps))
+    pure (newTeamMember uid ps)
+
+createConversation :: UserId
+                   -> Maybe (Range 1 256 Text)
+                   -> List1 Access
+                   -> Range 0 64 [UserId]
+                   -> Maybe ConvTeamInfo
+                   -> Galley Conversation
+createConversation usr name acc others tinf = do
     conv <- Id <$> liftIO nextRandom
     now  <- liftIO getCurrentTime
-    retry x5 $
-        write insertConv (params Quorum (conv, RegularConv, usr, Set (toList acc), fromRange <$> name))
+    retry x5 $ case tinf of
+        Nothing -> write insertConv (params Quorum (conv, RegularConv, usr, Set (toList acc), fromRange <$> name, Nothing))
+        Just ti -> batch $ do
+            setType BatchLogged
+            setConsistency Quorum
+            addPrepQuery Cql.insertConv (conv, RegularConv, usr, Set (toList acc), fromRange <$> name, tinf)
+            addPrepQuery Cql.insertTeamConv (cnvTeamId ti, conv)
     mems <- snd <$> addMembers now conv usr (rcast $ rsingleton usr `rappend` others)
-    return $ newConv conv RegularConv usr mems acc name
+    return $ newConv conv RegularConv usr mems acc name tinf
 
 createSelfConversation :: UserId -> Maybe (Range 1 256 Text) -> Galley Conversation
 createSelfConversation usr name = do
     let conv = Id (toUUID usr)
     now <- liftIO getCurrentTime
     retry x5 $
-        write insertConv (params Quorum (conv, SelfConv, usr, privateOnly,  fromRange <$> name))
+        write insertConv (params Quorum (conv, SelfConv, usr, privateOnly, fromRange <$> name, Nothing))
     mems <- snd <$> addMembers now conv usr (rcast $ rsingleton usr)
-    return $ newConv conv SelfConv usr mems (singleton PrivateAccess) name
+    return $ newConv conv SelfConv usr mems (singleton PrivateAccess) name Nothing
 
 createConnectConversation :: U.UUID U.V4
                           -> U.UUID U.V4
@@ -185,12 +239,12 @@ createConnectConversation a b name conn = do
         a'   = Id . U.unpack $ a
     now <- liftIO getCurrentTime
     retry x5 $
-        write insertConv (params Quorum (conv, ConnectConv, a', privateOnly, fromRange <$> name))
+        write insertConv (params Quorum (conv, ConnectConv, a', privateOnly, fromRange <$> name, Nothing))
     -- We add only one member, second one gets added later,
     -- when the other user accepts the connection request.
     mems <- snd <$> addMembers now conv a' (rcast $ rsingleton a')
     let e = Event ConvConnect conv a' now (Just $ EdConnect conn)
-    return (newConv conv ConnectConv a' mems (singleton PrivateAccess) name, e)
+    return (newConv conv ConnectConv a' mems (singleton PrivateAccess) name Nothing, e)
 
 createOne2OneConversation :: U.UUID U.V4
                           -> U.UUID U.V4
@@ -202,9 +256,9 @@ createOne2OneConversation a b name = do
         b'   = Id (U.unpack b)
     now <- liftIO getCurrentTime
     retry x5 $
-        write insertConv (params Quorum (conv, One2OneConv, a', privateOnly, fromRange <$> name))
+        write insertConv (params Quorum (conv, One2OneConv, a', privateOnly, fromRange <$> name, Nothing))
     mems <- snd <$> addMembers now conv a' (rcast $ a' <| rsingleton b')
-    return $ newConv conv One2OneConv a' mems (singleton PrivateAccess) name
+    return $ newConv conv One2OneConv a' mems (singleton PrivateAccess) name Nothing
 
 updateConversation :: MonadClient m => ConvId -> Range 1 256 Text -> m ()
 updateConversation cid name = retry x5 $ write updateConvName (params Quorum (fromRange name, cid))
@@ -279,14 +333,22 @@ acceptConnect cid = retry x5 $ write updateConvType (params Quorum (One2OneConv,
 one2OneConvId :: U.UUID U.V4 -> U.UUID U.V4 -> ConvId
 one2OneConvId a b = Id . U.unpack $ U.addv4 a b
 
-newConv :: ConvId -> ConvType -> UserId -> List1 Member -> List1 Access -> Maybe (Range 1 256 Text) -> Conversation
-newConv cid ct usr mems acc name = Conversation
+newConv :: ConvId
+        -> ConvType
+        -> UserId
+        -> List1 Member
+        -> List1 Access
+        -> Maybe (Range 1 256 Text)
+        -> Maybe ConvTeamInfo
+        -> Conversation
+newConv cid ct usr mems acc name tinf = Conversation
     { convId      = cid
     , convType    = ct
     , convCreator = usr
     , convName    = fromRange <$> name
     , convAccess  = acc
     , convMembers = toList mems
+    , convTeam    = tinf
     }
 
 newMember :: UserId -> Member
@@ -303,12 +365,12 @@ newMember u = Member
 
 toConv :: ConvId
        -> [Member]
-       -> Maybe (ConvType, UserId, Maybe (Set Access), Maybe Text)
+       -> Maybe (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe ConvTeamInfo)
        -> Maybe Conversation
 toConv cid mms conv =
     f mms <$> conv
   where
-    f ms (cty, uid, acc, nme) = Conversation cid cty uid nme (defAccess cty acc) ms
+    f ms (cty, uid, acc, nme, ti) = Conversation cid cty uid nme (defAccess cty acc) ms ti
 
 defAccess :: ConvType -> Maybe (Set Access) -> List1 Access
 defAccess SelfConv    Nothing             = singleton PrivateAccess
