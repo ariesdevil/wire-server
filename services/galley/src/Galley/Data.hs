@@ -29,6 +29,8 @@ module Galley.Data
 
       -- * Read
     , team
+    , teamIdsFrom
+    , teamIdsOf
     , teamMembers
     , teamConversationIds
     , conversation
@@ -169,6 +171,18 @@ team t =
     fmap toTeam <$> retry x1 (query1 selectTeam (params Quorum (Identity t)))
   where
     toTeam (u, n, i, k) = newTeam t u n i & teamIconKey .~ k
+
+teamIdsOf :: MonadClient m => UserId -> Range 1 32 (List TeamId) -> m [TeamId]
+teamIdsOf usr (fromList . fromRange -> tids) =
+    map runIdentity <$> retry x1 (query selectUserTeamsIn (params Quorum (usr, tids)))
+
+teamIdsFrom :: MonadClient m => UserId -> Maybe TeamId -> Range 1 1000 Int32 -> m (ResultSet TeamId)
+teamIdsFrom usr range (fromRange -> max) =
+    ResultSet . fmap runIdentity . strip <$> case range of
+        Just c  -> paginate selectUserTeamsFrom (paramsP Quorum (usr, c) (max + 1))
+        Nothing -> paginate selectUserTeams (paramsP Quorum (Identity usr) (max + 1))
+  where
+    strip p = p { result = take (fromIntegral max) (result p) }
 
 teamConversationIds :: MonadClient m => TeamId -> m [ConvId]
 teamConversationIds t = map runIdentity <$>

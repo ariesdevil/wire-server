@@ -23,6 +23,7 @@ import Galley.App
 import Galley.API.Clients
 import Galley.API.Create
 import Galley.API.Update
+import Galley.API.Teams
 import Galley.API.Query
 import Galley.Options
 import Galley.Types (OtrFilterMissing (..))
@@ -67,6 +68,57 @@ run o = do
 
 sitemap :: Routes ApiBuilder Galley ()
 sitemap = do
+    get "/teams" (continue getManyTeams) $
+        zauthUserId
+        .&. opt (query "ids" ||| query "start")
+        .&. def (unsafeRange 100) (query "size")
+        .&. accept "application" "json"
+
+    post "/teams" (continue createTeam) $
+        zauthUserId
+        .&. request
+        .&. contentType "application" "json"
+
+    get "/teams/:tid" (continue getTeam) $
+        zauthUserId
+        .&. capture "tid"
+        .&. accept "application" "json"
+
+    delete "/teams/:tid" (continue deleteTeam) $
+        zauthUserId
+        .&. capture "tid"
+        .&. accept "application" "json"
+
+    put "/teams/:tid" (continue updateTeam) $
+        zauthUserId
+        .&. capture "tid"
+        .&. request
+        .&. accept "application" "json"
+
+    get "/teams/:tid/members" (continue getTeamMembers) $
+        zauthUserId
+        .&. capture "tid"
+        .&. accept "application" "json"
+
+    put "/teams/:tid/members" (continue updateTeamMembers) $
+        zauthUserId
+        .&. capture "tid"
+        .&. request
+        .&. accept "application" "json"
+
+    get "/teams/:tid/conversations" (continue getTeamConvs) $
+        zauthUserId
+        .&. capture "tid"
+        .&. accept "application" "json"
+
+    put "/teams/:tid/conversations" (continue updateTeamConvs) $
+        zauthUserId
+        .&. capture "tid"
+        .&. request
+        .&. accept "application" "json"
+
+   --
+
     get "/bot/conversation" (continue getBotConversation) $
         zauth ZAuthBot
         .&> zauthBotId

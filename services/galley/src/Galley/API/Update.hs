@@ -57,6 +57,7 @@ import Galley.Intra.User
 import Galley.Types
 import Galley.Types.Bot
 import Galley.Types.Clients (Clients)
+import Galley.Types.Teams
 import Galley.Validation
 import Network.HTTP.Types
 import Network.Wai
@@ -105,27 +106,39 @@ joinConversation (zusr ::: zcon ::: cnv ::: _) = do
     addToConversation (botsAndUsers (Data.convMembers c)) zusr zcon new c
 
 addMembers :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Response
-addMembers (zusr ::: zcon ::: cnv ::: req ::: _) = do
-    js <- fromBody req invalidPayload
-    cc <- Data.conversation cnv >>= ifNothing convNotFound
-    let mems@(_, users) = botsAndUsers (Data.convMembers cc)
-    unless (zusr `isMember` users) $
-        throwM convNotFound
-    unless (InviteAccess `elem` Data.convAccess cc) $
-        throwM accessDenied
-    new <- rangeChecked (toList $ invUsers js) :: Galley (Range 1 128 [UserId])
-    let us = filter (notIsMember cc) (fromRange new)
-    ensureMemberLimit (toList $ Data.convMembers cc) us
-    ensureConnected zusr new
-    addToConversation mems zusr zcon us cc
+addMembers (zusr ::: zcon ::: cid ::: req ::: _) = do
+    body <- fromBody req invalidPayload
+    conv <- Data.conversation cid >>= ifNothing convNotFound
+    let mems = botsAndUsers (Data.convMembers conv)
+    to_add <- rangeChecked (toList $ invUsers body) :: Galley (Range 1 128 [UserId])
+    case Data.convTeam conv of
+        Nothing -> regularConvChecks conv (snd mems) to_add
+        Just ti -> teamConvChecks conv ti to_add
+    let new_users = filter (notIsMember conv) (fromRange to_add)
+    ensureMemberLimit (toList $ Data.convMembers conv) new_users
+    addToConversation mems zusr zcon new_users conv
+  where
+    regularConvChecks conv mems to_add = do
+        unless (zusr `isMember` mems) $
+            throwM convNotFound
+        unless (InviteAccess `elem` Data.convAccess conv) $
+            throwM accessDenied
+        ensureConnected zusr (fromRange to_add)
+
+    teamConvChecks conv tinfo to_add = do
+        unless (InviteAccess `elem` Data.convAccess conv) $
+            throwM accessDenied
+        tms <- Data.teamMembers (cnvTeamId tinfo)
+        permissionCheck zusr AddConversationMember tms
+        ensureConnected zusr (notSameTeam (fromRange to_add) tms)
 
 updateMember :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Response
-updateMember (zusr ::: zcon ::: cnv ::: req ::: _) = do
+updateMember (zusr ::: zcon ::: cid ::: req ::: _) = do
     j   <- fromBody req invalidPayload
-    m   <- Data.member cnv zusr >>= ifNothing convNotFound
-    up  <- Data.updateMember cnv zusr j
+    m   <- Data.member cid zusr >>= ifNothing convNotFound
+    up  <- Data.updateMember cid zusr j
     now <- liftIO getCurrentTime
-    let e = Event MemberStateUpdate cnv zusr now (Just $ EdMemberUpdate up)
+    let e = Event MemberStateUpdate cid zusr now (Just $ EdMemberUpdate up)
     let ms = applyChanges m up
     for_ (newPush e [recipient ms]) $ \p ->
         push1 $ p
@@ -144,23 +157,31 @@ updateMember (zusr ::: zcon ::: cnv ::: req ::: _) = do
         }
 
 removeMember :: UserId ::: ConnId ::: ConvId ::: UserId -> Galley Response
-removeMember (zusr ::: zcon ::: cnv ::: victim) = do
-    cc <- Data.conversation cnv >>= ifNothing convNotFound
-    let (bots, users) = botsAndUsers (Data.convMembers cc)
-    unless (zusr `isMember` users) $
-        throwM convNotFound
-    case Data.convType cc of
+removeMember (zusr ::: zcon ::: cid ::: victim) = do
+    conv <- Data.conversation cid >>= ifNothing convNotFound
+    let (bots, users) = botsAndUsers (Data.convMembers conv)
+    case Data.convTeam conv of
+        Nothing -> regularConvChecks users
+        Just ti -> teamConvChecks ti
+    case Data.convType conv of
         SelfConv    -> throwM invalidSelfOp
         One2OneConv -> throwM invalidOne2OneOp
         ConnectConv -> throwM invalidConnectOp
         _           -> return ()
     if victim `isMember` users then do
-        e <- Data.rmMembers cc zusr (singleton victim)
+        e <- Data.rmMembers conv zusr (singleton victim)
         for_ (newPush e (recipient <$> users)) $ \p ->
             push1 $ p & pushConn ?~ zcon
         void . fork $ void $ External.deliver (bots `zip` repeat e)
         return $ json e & setStatus status200
-    else return $ empty & setStatus status204
+    else
+        return $ empty & setStatus status204
+  where
+    regularConvChecks users =
+        unless (zusr `isMember` users) $ throwM convNotFound
+
+    teamConvChecks tinfo =
+        permissionCheck zusr RemoveConversationMember =<< Data.teamMembers (cnvTeamId tinfo)
 
 postBotMessage :: BotId ::: ConvId ::: OtrFilterMissing ::: Request ::: JSON ::: JSON -> Galley Response
 postBotMessage (zbot ::: zcnv ::: val ::: req ::: _) = do

@@ -7,7 +7,7 @@ module Galley.API.Util where
 
 import Brig.Types (Relation (..))
 import Brig.Types.Intra (ConnectionStatus (..))
-import Control.Lens ((&), (.~))
+import Control.Lens (view, (&), (.~))
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
@@ -23,17 +23,20 @@ import Galley.Data.Services (BotMember, newBotMember)
 import Galley.Intra.Push
 import Galley.Intra.User
 import Galley.Types
+import Galley.Types.Teams
 import Network.HTTP.Types.Status
 import Network.Wai.Predicate
 import Network.Wai.Utilities.Error
 
 import qualified Data.Text.Lazy as LT
+import qualified Data.Set       as Set
 import qualified Galley.Data    as Data
 
 type JSON = Media "application" "json"
 
-ensureConnected :: UserId -> Range 1 n [UserId] -> Galley ()
-ensureConnected u (fromRange -> uids) = do
+ensureConnected :: UserId -> [UserId] -> Galley ()
+ensureConnected _ []   = pure ()
+ensureConnected u uids = do
     conns <- getConnections u uids (Just Accepted)
     unless (all (isConnected u conns) uids) $
         throwM notConnected
@@ -47,6 +50,21 @@ ensureConnected u (fromRange -> uids) = do
            csFrom   cs == u1
         && csTo     cs == u2
         && csStatus cs == Accepted
+
+sameTeam :: [UserId] -> [TeamMember] -> [UserId]
+sameTeam uids tmms = Set.toList $
+    Set.fromList uids `Set.intersection` Set.fromList (map (view userId) tmms)
+
+notSameTeam :: [UserId] -> [TeamMember] -> [UserId]
+notSameTeam uids tmms = Set.toList $
+    Set.fromList uids `Set.difference` Set.fromList (sameTeam uids tmms)
+
+permissionCheck :: Foldable m => UserId -> Perm -> m TeamMember -> Galley ()
+permissionCheck u p t = do
+    case find ((u ==) . view userId) t of
+        Nothing -> throwM noTeamMember
+        Just  m -> unless (m `hasPermission` p) $ throwM (operationDenied p)
+    pure ()
 
 -- | Try to accept a 1-1 conversation, promoting connect conversations as appropriate.
 acceptOne2One :: UserId -> Data.Conversation -> Maybe ConnId -> Galley Data.Conversation
@@ -86,6 +104,9 @@ acceptOne2One usr conv conn = case Data.convType conv of
 
 isMember :: Foldable m => UserId -> m Member -> Bool
 isMember u = isJust . find ((u ==) . memId)
+
+isTeamMember :: Foldable m => UserId -> m TeamMember -> Bool
+isTeamMember u = isJust . find ((u ==) . view userId)
 
 isBot :: Member -> Bool
 isBot = isJust . memService

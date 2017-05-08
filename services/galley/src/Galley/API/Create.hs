@@ -28,6 +28,7 @@ import Galley.API.Mapping
 import Galley.API.Util
 import Galley.Intra.Push
 import Galley.Types
+import Galley.Types.Teams
 import Galley.Validation (rangeChecked, rangeCheckedMaybe)
 import Network.HTTP.Types
 import Network.Wai
@@ -42,17 +43,34 @@ import qualified Galley.Data       as Data
 
 createGroupConversation :: UserId ::: ConnId ::: Request ::: JSON -> Galley Response
 createGroupConversation (zusr::: zcon ::: req ::: _) = do
-    j <- fromBody req invalidPayload
-    case newConvUsers j of
-        [] -> fun j (rcast rnil)
+    body <- fromBody req invalidPayload
+    case newConvTeam body of
+        Nothing -> createRegularConv body
+        Just tm -> createTeamConv tm body
+  where
+    createTeamConv tinfo body = do
+        tms <- Data.teamMembers (cnvTeamId tinfo)
+        permissionCheck zusr CreateConversation tms
+        case newConvUsers body of
+            [] -> action body (rcast rnil)
+            uu -> do
+                when (cnvManaged tinfo) $
+                    throwM noAddToManaged
+                permissionCheck zusr AddConversationMember tms
+                uids <- rangeChecked uu :: Galley (Range 1 64 [UserId])
+                ensureConnected zusr (notSameTeam (fromRange uids) tms)
+                action body (rcast uids)
+
+    createRegularConv body = case newConvUsers body of
+        [] -> action body (rcast rnil)
         xs -> do
             uids <- rangeChecked xs :: Galley (Range 1 64 [UserId])
-            ensureConnected zusr uids
-            fun j (rcast uids)
-  where
-    fun j uids = do
-        n <- rangeCheckedMaybe (newConvName j)
-        c <- Data.createConversation zusr n (access j) uids (newConvTeam j)
+            ensureConnected zusr (fromRange uids)
+            action body (rcast uids)
+
+    action body uids = do
+        n <- rangeCheckedMaybe (newConvName body)
+        c <- Data.createConversation zusr n (access body) uids (newConvTeam body)
         notifyCreatedConversation zusr (Just zcon) c
         conversationResponse status201 zusr c
 
@@ -76,7 +94,7 @@ createOne2OneConversation (zusr ::: zcon ::: req ::: _) = do
     (x, y) <- toUUIDs zusr (List.head $ fromRange u)
     when (x == y) $
         throwM $ invalidOp "Cannot create a 1-1 with yourself"
-    ensureConnected zusr u
+    ensureConnected zusr (fromRange u)
     n <- rangeCheckedMaybe (newConvName j)
     c <- Data.conversation (Data.one2OneConvId x y)
     maybe (create x y n) (conversationResponse status200 zusr) c

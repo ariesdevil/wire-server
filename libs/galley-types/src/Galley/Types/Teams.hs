@@ -11,6 +11,11 @@ module Galley.Types.Teams
     , teamIcon
     , teamIconKey
 
+    , TeamList
+    , newTeamList
+    , teamListTeams
+    , teamListHasMore
+
     , TeamMember
     , newTeamMember
     , userId
@@ -24,6 +29,7 @@ module Galley.Types.Teams
 
     , Permissions
     , newPermissions
+    , hasPermission
     , self
     , copy
 
@@ -34,7 +40,7 @@ module Galley.Types.Teams
     , intToPerms
     ) where
 
-import Control.Lens (makeLenses)
+import Control.Lens (makeLenses, (^.))
 import Data.Aeson
 import Data.Bits (testBit, (.|.))
 import Data.Id (TeamId, UserId)
@@ -52,10 +58,18 @@ data Team = Team
     , _teamName    :: Text
     , _teamIcon    :: Text
     , _teamIconKey :: Maybe Text
-    }
+    } deriving Show
 
 newTeam :: TeamId -> UserId -> Text -> Text -> Team
 newTeam tid uid nme ico = Team tid uid nme ico Nothing
+
+data TeamList = TeamList
+    { _teamListTeams   :: [Team]
+    , _teamListHasMore :: Bool
+    } deriving Show
+
+newTeamList :: [Team] -> Bool -> TeamList
+newTeamList = TeamList
 
 data TeamMember = TeamMember
     { _userId      :: UserId
@@ -90,6 +104,7 @@ data Perm =
     deriving (Eq, Ord, Show)
 
 makeLenses ''Team
+makeLenses ''TeamList
 makeLenses ''TeamMember
 makeLenses ''NewTeam
 makeLenses ''Permissions
@@ -98,6 +113,9 @@ newPermissions :: Set Perm -> Set Perm -> Maybe Permissions
 newPermissions a b
     | b `Set.isSubsetOf` a = Just (Permissions a b)
     | otherwise            = Nothing
+
+hasPermission :: TeamMember -> Perm -> Bool
+hasPermission tm p = p `Set.member` (tm^.permissions.self)
 
 permToInt :: Perm -> Word64
 permToInt CreateConversation       = 0x001
@@ -146,6 +164,17 @@ instance FromJSON Team where
              <*> o .:  "name"
              <*> o .:  "icon"
              <*> o .:? "icon_key"
+
+instance ToJSON TeamList where
+    toJSON t = object
+        $ "teams"    .= _teamListTeams t
+        # "has_more" .= _teamListHasMore t
+        # []
+
+instance FromJSON TeamList where
+    parseJSON = withObject "teamlist" $ \o -> do
+        TeamList <$> o .: "teams"
+                 <*> o .: "has_more"
 
 instance ToJSON TeamMember where
     toJSON m = object

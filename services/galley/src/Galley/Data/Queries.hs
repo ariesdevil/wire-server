@@ -32,6 +32,12 @@ selectTeamMembers = "select user, perms from team_member where team = ? order by
 selectUserTeams :: PrepQuery R (Identity UserId) (Identity TeamId)
 selectUserTeams = "select team from user_team where user = ? order by team"
 
+selectUserTeamsIn :: PrepQuery R (UserId, [TeamId]) (Identity TeamId)
+selectUserTeamsIn = "select team from user_team where user = ? and team in ? order by team"
+
+selectUserTeamsFrom :: PrepQuery R (UserId, TeamId) (Identity TeamId)
+selectUserTeamsFrom = "select team from user_team where user = ? and team > ? order by team"
+
 insertTeam :: PrepQuery W (TeamId, UserId, Text, Text, Maybe Text) ()
 insertTeam = "insert into team (team, creator, name, icon, icon_key) values (?, ?, ?, ?, ?)"
 

@@ -29,6 +29,7 @@ library
         Galley.API.Internal
         Galley.API.Mapping
         Galley.API.Query
+        Galley.API.Teams
         Galley.API.Update
         Galley.API.Util
         Galley.Data
