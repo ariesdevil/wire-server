@@ -12,6 +12,7 @@ module Data.Range
     , Bounds (..)
     , checked
     , checkedEither
+    , checkedEitherMsg
     , unsafeRange
     , fromRange
     , rcast
@@ -99,26 +100,38 @@ instance (Within a n m, Cql a) => Cql (Range n m a) where
 type LTE (n :: Nat) (m :: Nat)      = (SingI n, SingI m, (n :<= m) ~ 'True)
 type Within a (n :: Nat) (m :: Nat) = (Bounds a, LTE n m)
 
+mk :: Bounds a => a -> SNat n -> SNat m -> Maybe (Range n m a)
+mk a sn sm =
+    let n = fromSing sn
+        m = fromSing sm
+    in if within a n m
+           then Just (Range a)
+           else Nothing
+
 checked :: Within a n m => a -> Maybe (Range n m a)
-checked x = either (const Nothing) Just (checkedEither x)
+checked x = mk x sing sing
+
+errorMsg n m = showString "outside range ["
+             . shows n
+             . showString ", "
+             . shows m
+             . showString "]"
+             $ ""
+checkedEitherMsg :: Within a n m => String -> a -> Either String (Range n m a)
+checkedEitherMsg msg x = do
+    let sn = sing
+        sm = sing
+    case mk x sn sm of
+        Nothing -> Left $ msg ++ ": " ++ errorMsg (fromSing sn) (fromSing sm)
+        Just  r -> Right r
 
 checkedEither :: Within a n m => a -> Either String (Range n m a)
-checkedEither x = mk x sing sing
-  where
-    mk :: Bounds a => a -> SNat n -> SNat m -> Either String (Range n m a)
-    mk a sn sm =
-        let n = fromSing sn
-            m = fromSing sm
-        in if within a n m
-               then Right (Range a)
-               else Left (errorMsg n m)
-
-    errorMsg n m = showString "outside range ["
-                 . shows n
-                 . showString ", "
-                 . shows m
-                 . showString "]"
-                 $ ""
+checkedEither x = do
+    let sn = sing
+        sm = sing
+    case mk x sn sm of
+        Nothing -> Left $ errorMsg (fromSing sn) (fromSing sm)
+        Just  r -> Right r
 
 unsafeRange :: (Show a, Within a n m) => a -> Range n m a
 unsafeRange x = fromMaybe (errorMsg sing sing) (checked x)

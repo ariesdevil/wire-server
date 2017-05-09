@@ -26,6 +26,9 @@ selectTeam = "select creator, name, icon, icon_key from team where team = ?"
 selectTeamConvs :: PrepQuery R (Identity TeamId) (Identity ConvId)
 selectTeamConvs = "select conv from team_conv where team = ? order by conv"
 
+selectTeamMember :: PrepQuery R (TeamId, UserId) (Identity Permissions)
+selectTeamMember = "select perms from team_member where team = ? and user = ?"
+
 selectTeamMembers :: PrepQuery R (Identity TeamId) (UserId, Permissions)
 selectTeamMembers = "select user, perms from team_member where team = ? order by user"
 

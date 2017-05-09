@@ -11,6 +11,7 @@ import Control.Lens (view, (&), (.~))
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
+import Data.ByteString.Conversion
 import Data.Id
 import Data.Foldable (find, for_, toList)
 import Data.Maybe (isJust)
@@ -24,9 +25,10 @@ import Galley.Intra.Push
 import Galley.Intra.User
 import Galley.Types
 import Galley.Types.Teams
-import Network.HTTP.Types.Status
+import Network.HTTP.Types
+import Network.Wai
 import Network.Wai.Predicate
-import Network.Wai.Utilities.Error
+import Network.Wai.Utilities
 
 import qualified Data.Text.Lazy as LT
 import qualified Data.Set       as Set
@@ -102,14 +104,17 @@ acceptOne2One usr conv conn = case Data.convType conv of
                  $ "Connect conversation with more than 2 members: "
                 <> LT.pack (show cid)
 
-isMember :: Foldable m => UserId -> m Member -> Bool
-isMember u = isJust . find ((u ==) . memId)
-
 isTeamMember :: Foldable m => UserId -> m TeamMember -> Bool
-isTeamMember u = isJust . find ((u ==) . view userId)
+isTeamMember u = isJust . findTeamMember u
+
+findTeamMember :: Foldable m => UserId -> m TeamMember -> Maybe TeamMember
+findTeamMember u = find ((u ==) . view userId)
 
 isBot :: Member -> Bool
 isBot = isJust . memService
+
+isMember :: Foldable m => UserId -> m Member -> Bool
+isMember u = isJust . find ((u ==) . memId)
 
 findMember :: Data.Conversation -> UserId -> Maybe Member
 findMember c u = find ((u ==) . memId) (Data.convMembers c)
@@ -120,4 +125,7 @@ botsAndUsers = foldr fn ([], [])
     fn m ~(bb, mm) = case newBotMember m of
         Nothing -> (bb, m:mm)
         Just  b -> (b:bb, mm)
+
+location :: ToByteString a => a -> Response -> Response
+location = addHeader hLocation . toByteString'
 

@@ -15,6 +15,7 @@ module Galley.API.Teams
     ) where
 
 import Cassandra (result, hasMore)
+import Control.Lens
 import Control.Monad (unless)
 import Control.Monad.Catch
 import Data.ByteString.Conversion
@@ -27,6 +28,7 @@ import Galley.App
 import Galley.API.Error
 import Galley.API.Util
 import Galley.Types.Teams
+import Network.HTTP.Types
 import Network.Wai
 import Network.Wai.Predicate hiding (setStatus, result)
 import Network.Wai.Utilities
@@ -46,28 +48,56 @@ getManyTeams (zusr ::: range ::: size ::: _) =
 
 lookupTeam :: UserId -> TeamId -> Galley (Maybe Team)
 lookupTeam zusr tid = do
-    m <- Data.teamMembers tid
-    unless (zusr `isTeamMember` m) $
-        throwM teamNotFound
+    _ <- Data.teamMember tid zusr >>= ifNothing teamNotFound
     Data.team tid
 
 createTeam :: UserId ::: Request ::: JSON -> Galley Response
-createTeam (zusr::: req ::: _) = undefined
+createTeam (zusr::: req ::: _) = do
+    body <- fromBody req invalidPayload
+    team <- Data.createTeam zusr
+                (body^.newTeamName)
+                (body^.newTeamIcon)
+                (body^.newTeamIconKey)
+                (body^.newTeamMembers)
+    pure (empty & setStatus status201 . location (team^.teamId))
 
 deleteTeam :: UserId ::: TeamId ::: JSON -> Galley Response
 deleteTeam (zusr::: tid ::: _) = undefined
 
 updateTeam :: UserId ::: TeamId ::: Request ::: JSON -> Galley Response
-updateTeam (zusr::: tid ::: req ::: _) = undefined
+updateTeam (zusr::: tid ::: req ::: _) = do
+    body <- fromBody req invalidPayload
+    mems <- Data.teamMembers tid
+    case findTeamMember zusr mems of
+        Nothing -> throwM teamNotFound
+        Just m  -> do
+            add mems (body^.addTeamMembers)
+            del mems (body^.delTeamMembers)
+  where
+    add _   Nothing   = pure ()
+    add mm (Just new) = do
+        unless (m `hasPermission` AddTeamMember) $
+            throwM (operationDenied AddTeamMember)
 
 getTeamMembers :: UserId ::: TeamId ::: JSON -> Galley Response
-getTeamMembers (zusr::: tid ::: _) = undefined
+getTeamMembers (zusr::: tid ::: _) = do
+    mm <- Data.teamMembers tid
+    case findTeamMember zusr mm of
+        Nothing -> throwM teamNotFound
+        Just  m -> do
+            let withPerm = m `hasPermission` GetMemberPermissions
+            pure (json $ teamMemberListJson withPerm (newTeamMemberList mm))
 
 updateTeamMembers :: UserId ::: TeamId ::: Request ::: JSON -> Galley Response
 updateTeamMembers (zusr::: tid ::: req ::: _) = undefined
 
 getTeamConvs :: UserId ::: TeamId ::: JSON -> Galley Response
-getTeamConvs (zusr::: tid ::: _) = undefined
+getTeamConvs (zusr::: tid ::: _) = do
+    tm <- Data.teamMember tid zusr >>= ifNothing teamNotFound
+    unless (tm `hasPermission` GetTeamConversations) $
+        throwM (operationDenied GetTeamConversations)
+    tc <- map newTeamConversation <$> Data.teamConversationIds tid
+    pure (json $ newTeamConversationList tc)
 
 updateTeamConvs :: UserId ::: TeamId ::: Request ::: JSON -> Galley Response
 updateTeamConvs (zusr::: tid ::: req ::: _) = undefined

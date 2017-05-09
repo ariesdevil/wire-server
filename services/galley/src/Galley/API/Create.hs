@@ -14,7 +14,6 @@ import Control.Lens hiding ((??))
 import Control.Monad (when)
 import Control.Monad.Catch
 import Control.Monad.IO.Class
-import Data.ByteString.Conversion
 import Data.Foldable (for_, toList)
 import Data.Id
 import Data.List1
@@ -176,9 +175,6 @@ notifyCreatedConversation usr conn c = do
         return $ newPush1 e (list1 (recipient m) [])
                & pushConn  .~ conn
                & pushRoute .~ route
-
-location :: ConvId -> Response -> Response
-location = addHeader hLocation . toByteString'
 
 toUUIDs :: UserId -> UserId -> Galley (U.UUID U.V4, U.UUID U.V4)
 toUUIDs a b = do

@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds         #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData        #-}
 {-# LANGUAGE TemplateHaskell   #-}
@@ -20,12 +21,20 @@ module Galley.Types.Teams
     , newTeamMember
     , userId
     , permissions
+    , teamMemberJson
 
-    , NewTeam
-    , newTeamName
-    , newTeamIcon
-    , newTeamIconKey
-    , newTeamMembers
+    , TeamMemberList
+    , newTeamMemberList
+    , teamMembers
+    , teamMemberListJson
+
+    , TeamConversation
+    , newTeamConversation
+    , conversationId
+
+    , TeamConversationList
+    , newTeamConversationList
+    , teamConversations
 
     , Permissions
     , newPermissions
@@ -38,14 +47,28 @@ module Galley.Types.Teams
     , permsToInt
     , intToPerm
     , intToPerms
+
+    , NewTeam
+    , newNewTeam
+    , newTeamName
+    , newTeamIcon
+    , newTeamIconKey
+    , newTeamMembers
+
+    , UpdateTeamMembers
+    , newUpdateTeamMembers
+    , addTeamMembers
+    , delTeamMembers
+
     ) where
 
 import Control.Lens (makeLenses, (^.))
 import Data.Aeson
 import Data.Bits (testBit, (.|.))
-import Data.Id (TeamId, UserId)
+import Data.Id (TeamId, ConvId, UserId)
 import Data.Json.Util
 import Data.Maybe (mapMaybe)
+import Data.Range
 import Data.Set (Set)
 import Data.Text (Text)
 import Data.Word
@@ -60,30 +83,26 @@ data Team = Team
     , _teamIconKey :: Maybe Text
     } deriving Show
 
-newTeam :: TeamId -> UserId -> Text -> Text -> Team
-newTeam tid uid nme ico = Team tid uid nme ico Nothing
-
 data TeamList = TeamList
     { _teamListTeams   :: [Team]
     , _teamListHasMore :: Bool
     } deriving Show
-
-newTeamList :: [Team] -> Bool -> TeamList
-newTeamList = TeamList
 
 data TeamMember = TeamMember
     { _userId      :: UserId
     , _permissions :: Permissions
     }
 
-newTeamMember :: UserId -> Permissions -> TeamMember
-newTeamMember = TeamMember
+newtype TeamMemberList = TeamMemberList
+    { _teamMembers :: [TeamMember]
+    }
 
-data NewTeam = NewTeam
-    { _newTeamName    :: Text
-    , _newTeamIcon    :: Text
-    , _newTeamIconKey :: Maybe Text
-    , _newTeamMembers :: [TeamMember]
+newtype TeamConversation = TeamConversation
+    { _conversationId :: ConvId
+    }
+
+newtype TeamConversationList = TeamConversationList
+    { _teamConversations :: [TeamConversation]
     }
 
 data Permissions = Permissions
@@ -101,13 +120,59 @@ data Perm =
     | GetBilling
     | SetBilling
     | SetTeamData
+    | GetMemberPermissions
+    | GetTeamConversations
     deriving (Eq, Ord, Show)
+
+data NewTeam = NewTeam
+    { _newTeamName    :: Range 1 256 Text
+    , _newTeamIcon    :: Range 1 256 Text
+    , _newTeamIconKey :: Maybe (Range 1 256 Text)
+    , _newTeamMembers :: Maybe (Range 1 128 [TeamMember])
+    }
+
+data UpdateTeamMembers = UpdateTeamMembers
+    { _addTeamMembers :: Maybe (Range 1 128 [TeamMember])
+    , _delTeamMembers :: Maybe (Range 1 128 [UserId])
+    }
+
+newTeam :: TeamId -> UserId -> Text -> Text -> Team
+newTeam tid uid nme ico = Team tid uid nme ico Nothing
+
+newTeamList :: [Team] -> Bool -> TeamList
+newTeamList = TeamList
+
+newTeamMember :: UserId -> Permissions -> TeamMember
+newTeamMember = TeamMember
+
+newTeamMemberList :: [TeamMember] -> TeamMemberList
+newTeamMemberList = TeamMemberList
+
+newTeamConversation :: ConvId -> TeamConversation
+newTeamConversation = TeamConversation
+
+newTeamConversationList :: [TeamConversation] -> TeamConversationList
+newTeamConversationList = TeamConversationList
+
+newNewTeam :: Range 1 256 Text -> Range 1 256 Text -> NewTeam
+newNewTeam nme ico = NewTeam nme ico Nothing Nothing
+
+newUpdateTeamMembers
+    :: Maybe (Range 1 128 [TeamMember])
+    -> Maybe (Range 1 128 [UserId])
+    -> Maybe UpdateTeamMembers
+newUpdateTeamMembers Nothing Nothing = Nothing
+newUpdateTeamMembers add     remove  = Just (UpdateTeamMembers add remove)
 
 makeLenses ''Team
 makeLenses ''TeamList
 makeLenses ''TeamMember
-makeLenses ''NewTeam
+makeLenses ''TeamMemberList
+makeLenses ''TeamConversation
+makeLenses ''TeamConversationList
 makeLenses ''Permissions
+makeLenses ''NewTeam
+makeLenses ''UpdateTeamMembers
 
 newPermissions :: Set Perm -> Set Perm -> Maybe Permissions
 newPermissions a b
@@ -127,6 +192,8 @@ permToInt RemoveConversationMember = 0x020
 permToInt GetBilling               = 0x040
 permToInt SetBilling               = 0x080
 permToInt SetTeamData              = 0x100
+permToInt GetMemberPermissions     = 0x200
+permToInt GetTeamConversations     = 0x400
 
 intToPerm :: Word64 -> Maybe Perm
 intToPerm 0x001 = Just CreateConversation
@@ -138,6 +205,8 @@ intToPerm 0x020 = Just RemoveConversationMember
 intToPerm 0x040 = Just GetBilling
 intToPerm 0x080 = Just SetBilling
 intToPerm 0x100 = Just SetTeamData
+intToPerm 0x200 = Just GetMemberPermissions
+intToPerm 0x400 = Just GetTeamConversations
 intToPerm _     = Nothing
 
 intToPerms :: Word64 -> Set Perm
@@ -176,31 +245,36 @@ instance FromJSON TeamList where
         TeamList <$> o .: "teams"
                  <*> o .: "has_more"
 
-instance ToJSON TeamMember where
-    toJSON m = object
-        $ "user"        .= _userId m
-        # "permissions" .= _permissions m
-        # []
+teamMemberJson :: Bool -> TeamMember -> Value
+teamMemberJson False m = object [ "user" .= _userId m ]
+teamMemberJson True  m = object [ "user" .= _userId m, "permissions" .= _permissions m ]
+
+teamMemberListJson :: Bool -> TeamMemberList -> Value
+teamMemberListJson withPerm l =
+    object [ "members" .= map (teamMemberJson withPerm) (_teamMembers l) ]
 
 instance FromJSON TeamMember where
     parseJSON = withObject "team-member" $ \o -> do
         TeamMember <$> o .:  "user"
                    <*> o .:  "permissions"
 
-instance ToJSON NewTeam where
-    toJSON t = object
-        $ "name"     .= _newTeamName t
-        # "icon"     .= _newTeamIcon t
-        # "icon_key" .= _newTeamIconKey t
-        # "members"  .= _newTeamMembers t
-        # []
+instance FromJSON TeamMemberList where
+    parseJSON = withObject "team member list" $ \o -> do
+        TeamMemberList <$> o .: "members"
 
-instance FromJSON NewTeam where
-    parseJSON = withObject "new-team" $ \o -> do
-        NewTeam <$> o .:  "name"
-                <*> o .:  "icon"
-                <*> o .:? "icon_key"
-                <*> o .:  "members"
+instance ToJSON TeamConversation where
+    toJSON t = object ["conversation" .= _conversationId t]
+
+instance FromJSON TeamConversation where
+    parseJSON = withObject "team conversation" $ \o -> do
+        TeamConversation <$> o .: "conversation"
+
+instance ToJSON TeamConversationList where
+    toJSON t = object ["conversations" .= _teamConversations t]
+
+instance FromJSON TeamConversationList where
+    parseJSON = withObject "team conversation list" $ \o -> do
+        TeamConversationList <$> o .: "conversations"
 
 instance ToJSON Permissions where
     toJSON p = object
@@ -215,3 +289,42 @@ instance FromJSON Permissions where
         case newPermissions s d of
             Nothing -> fail "invalid permissions"
             Just ps -> pure ps
+
+instance ToJSON NewTeam where
+    toJSON t = object
+        $ "name"     .= fromRange (_newTeamName t)
+        # "icon"     .= fromRange (_newTeamIcon t)
+        # "icon_key" .= (fromRange <$> _newTeamIconKey t)
+        # "members"  .= (map (teamMemberJson True) . fromRange <$> _newTeamMembers t)
+        # []
+
+instance FromJSON NewTeam where
+    parseJSON = withObject "new-team" $ \o -> do
+        name <- o .:  "name"
+        icon <- o .:  "icon"
+        key  <- o .:? "icon_key"
+        mems <- o .:? "members"
+        either fail pure $
+            NewTeam <$> checkedEitherMsg "name" name
+                    <*> checkedEitherMsg "icon" icon
+                    <*> maybe (pure Nothing) (fmap Just . checkedEitherMsg "icon_key") key
+                    <*> maybe (pure Nothing) (fmap Just . checkedEitherMsg "members") mems
+
+instance ToJSON UpdateTeamMembers where
+    toJSON t = object
+        $ "add"     .= (map (teamMemberJson True) . fromRange <$> _addTeamMembers t)
+        # "remove"  .= (fromRange <$> _delTeamMembers t)
+        # []
+
+instance FromJSON UpdateTeamMembers where
+    parseJSON = withObject "update team members" $ \o -> do
+        add <- o .:? "add"
+        del <- o .:? "remove"
+        utm <- either fail pure $ UpdateTeamMembers
+            <$> maybe (pure Nothing) (fmap Just . checkedEitherMsg "add") add
+            <*> maybe (pure Nothing) (fmap Just . checkedEitherMsg "remove") del
+        if null (_addTeamMembers utm) && null (_delTeamMembers utm) then
+            fail "At least one of {'add', 'remove'} must be present."
+        else
+            pure utm
+

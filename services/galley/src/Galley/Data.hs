@@ -20,7 +20,7 @@ module Galley.Data
     , updateConversation
     , updateMember
     , addMembers
-    , addTeamMember
+    , addTeamMembers
     , rmMembers
     , deleteMember
     , acceptConnect
@@ -31,6 +31,7 @@ module Galley.Data
     , team
     , teamIdsFrom
     , teamIdsOf
+    , teamMember
     , teamMembers
     , teamConversationIds
     , conversation
@@ -73,7 +74,7 @@ import Galley.Data.Instances ()
 import Galley.Types hiding (Conversation)
 import Galley.Types.Bot (newServiceRef)
 import Galley.Types.Clients (Clients)
-import Galley.Types.Teams
+import Galley.Types.Teams hiding (teamMembers)
 import Prelude hiding (max)
 import System.Logger.Class (MonadLogger)
 import System.Logger.Message (msg, (+++), val)
@@ -192,28 +193,43 @@ teamMembers :: MonadClient m => TeamId -> m [TeamMember]
 teamMembers t = map (uncurry newTeamMember) <$>
     retry x1 (query selectTeamMembers (params Quorum (Identity t)))
 
+teamMember :: MonadClient m => TeamId -> UserId -> m (Maybe TeamMember)
+teamMember t u = fmap (newTeamMember u . runIdentity) <$>
+    retry x1 (query1 selectTeamMember (params Quorum (t, u)))
+
 userTeamIds :: MonadClient m => UserId -> m [TeamId]
 userTeamIds u = map runIdentity <$>
     retry x1 (query selectUserTeams (params Quorum (Identity u)))
-
 
 createTeam :: MonadClient m
            => UserId
            -> Range 1 256 Text
            -> Range 1 256 Text
            -> Maybe (Range 1 256 Text)
+           -> Maybe (Range 1 128 [TeamMember])
            -> m Team
-createTeam uid (fromRange -> n) (fromRange -> i) k = do
+createTeam uid (fromRange -> n) (fromRange -> i) k mm = do
     tid <- Id <$> liftIO nextRandom
-    retry x5 $
-        write insertTeam (params Quorum (tid, uid, n, i, fromRange <$> k))
+    case mm of
+        Nothing -> retry x5 $ write insertTeam (params Quorum (tid, uid, n, i, fromRange <$> k))
+        Just tm -> retry x5 $ batch $ do
+            setType BatchLogged
+            setConsistency Quorum
+            addPrepQuery insertTeam (tid, uid, n, i, fromRange <$> k)
+            for_ (fromRange tm) $ \m -> do
+                addPrepQuery insertTeamMember (tid, m^.userId, m^.permissions)
+                addPrepQuery insertUserTeam   (m^.userId, tid)
     pure (newTeam tid uid n i & teamIconKey .~ (fromRange <$> k))
 
-addTeamMember :: MonadClient m => TeamId -> UserId -> Permissions -> m TeamMember
-addTeamMember tid uid ps = do
-    retry x5 $
-        write insertTeamMember (params Quorum (tid, uid, ps))
-    pure (newTeamMember uid ps)
+addTeamMembers :: MonadClient m => TeamId -> Range 1 128 [TeamMember] -> m ()
+addTeamMembers t (fromRange -> mm) = do
+    retry x5 $ batch $ do
+        setType BatchLogged
+        setConsistency Quorum
+        for_ mm $ \m -> do
+            addPrepQuery insertTeamMember (t, m^.userId, m^.permissions)
+            addPrepQuery insertUserTeam   (m^.userId, t)
+    pure ()
 
 createConversation :: UserId
                    -> Maybe (Range 1 256 Text)
