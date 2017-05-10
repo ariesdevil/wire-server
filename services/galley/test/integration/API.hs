@@ -476,7 +476,7 @@ postO2OConvOk g b = do
 postConvO2OFailWithSelf :: Galley -> Brig -> Http ()
 postConvO2OFailWithSelf g b = do
     alice <- randomUser b
-    let inv = NewConv [alice] Nothing mempty
+    let inv = NewConv [alice] Nothing mempty Nothing
     post (g . path "/conversations/one2one" . zUser alice . zConn "conn" . zType "access" . json inv) !!! do
         const 403 === statusCode
         const (Just "invalid-op") === fmap label . decodeBody
@@ -653,7 +653,7 @@ accessConvMeta g b = do
     chuck <- randomUser b
     connectUsers b alice (list1 bob [chuck])
     conv  <- decodeConvId <$> postConv g alice [bob, chuck] (Just "gossip") []
-    let meta = ConversationMeta conv RegularConv alice (singleton InviteAccess) (Just "gossip")
+    let meta = ConversationMeta conv RegularConv alice (singleton InviteAccess) (Just "gossip") Nothing
     get (g . paths ["i/conversations", toByteString' conv, "meta"] . zUser alice) !!! do
         const 200         === statusCode
         const (Just meta) === (decode <=< responseBody)

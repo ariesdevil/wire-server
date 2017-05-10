@@ -56,7 +56,7 @@ test m s h = testCase s (runHttpT m h)
 
 postConv :: Galley -> UserId -> [UserId] -> Maybe Text -> [Access] -> Http ResponseLBS
 postConv g u us name a = do
-    let conv = NewConv us name (Set.fromList a)
+    let conv = NewConv us name (Set.fromList a) Nothing
     post $ g . path "/conversations" . zUser u . zConn "conn" . zType "access" . json conv
 
 postSelfConv :: Galley -> UserId -> Http ResponseLBS
@@ -64,7 +64,7 @@ postSelfConv g u = post $ g . path "/conversations/self" . zUser u . zConn "conn
 
 postO2OConv :: Galley -> UserId -> UserId -> Maybe Text -> Http ResponseLBS
 postO2OConv g u1 u2 n = do
-    let conv = NewConv [u2] n mempty
+    let conv = NewConv [u2] n mempty Nothing
     post $ g . path "/conversations/one2one" . zUser u1 . zConn "conn" . zType "access" . json conv
 
 postConnectConv :: Galley -> UserId -> UserId -> Text -> Text -> Maybe Text -> Http ResponseLBS
