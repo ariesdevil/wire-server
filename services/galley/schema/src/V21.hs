@@ -14,7 +14,7 @@ migration = Migration 21 "Add teams" $ do
             creator  uuid,
             name     text,
             icon     text,
-            icon_key text,
+            icon_key text
         ) WITH compaction = {'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}
             AND gc_grace_seconds = 864000;
         |]
@@ -23,7 +23,7 @@ migration = Migration 21 "Add teams" $ do
         CREATE TABLE team_conv (
             team    uuid,
             conv    uuid,
-            managed boolean
+            managed boolean,
             PRIMARY KEY (team, conv)
         ) WITH CLUSTERING ORDER BY (conv ASC)
             AND compaction = {'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}
