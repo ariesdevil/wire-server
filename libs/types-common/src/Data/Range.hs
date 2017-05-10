@@ -72,29 +72,19 @@ instance ToJSON a => ToJSON (Range n m a) where
     toJSON = toJSON . fromRange
 
 instance (Within a n m, FromJSON a) => FromJSON (Range n m a) where
-    parseJSON v = parseJSON v >>= maybe (errorMsg sing sing) return . checked
+    parseJSON v = parseJSON v >>= maybe (msg sing sing) return . checked
       where
-        errorMsg :: Bounds a => SNat n -> SNat m -> Aeson.Parser (Range n m a)
-        errorMsg n m = fail $ showString "outside range ["
-                            . shows (fromSing n)
-                            . showString ", "
-                            . shows (fromSing m)
-                            . showString "]"
-                            $ ""
+        msg :: Bounds a => SNat n -> SNat m -> Aeson.Parser (Range n m a)
+        msg sn sm = fail (errorMsg (fromSing sn) (fromSing sm) "")
 
 #ifdef WITH_CQL
 instance (Within a n m, Cql a) => Cql (Range n m a) where
     ctype = retag (ctype :: Tagged a ColumnType)
     toCql = toCql . fromRange
-    fromCql c = fromCql c >>= maybe (errorMsg sing sing) return . checked
+    fromCql c = fromCql c >>= maybe (msg sing sing) return . checked
       where
-        errorMsg :: Bounds a => SNat n -> SNat m -> Either String (Range n m a)
-        errorMsg n m = Left $ showString "outside range ["
-                            . shows (fromSing n)
-                            . showString ", "
-                            . shows (fromSing m)
-                            . showString "]"
-                            $ ""
+        msg :: Bounds a => SNat n -> SNat m -> Either String (Range n m a)
+        msg sn sm = Left (errorMsg (fromSing sn) (fromSing sm) "")
 #endif
 
 type LTE (n :: Nat) (m :: Nat)      = (SingI n, SingI m, (n :<= m) ~ 'True)
@@ -111,18 +101,19 @@ mk a sn sm =
 checked :: Within a n m => a -> Maybe (Range n m a)
 checked x = mk x sing sing
 
+errorMsg :: (Show a, Show b) => a -> b -> ShowS
 errorMsg n m = showString "outside range ["
              . shows n
              . showString ", "
              . shows m
              . showString "]"
-             $ ""
+
 checkedEitherMsg :: Within a n m => String -> a -> Either String (Range n m a)
 checkedEitherMsg msg x = do
     let sn = sing
         sm = sing
     case mk x sn sm of
-        Nothing -> Left $ msg ++ ": " ++ errorMsg (fromSing sn) (fromSing sm)
+        Nothing -> Left $ showString msg . showString ": " . errorMsg (fromSing sn) (fromSing sm) $ ""
         Just  r -> Right r
 
 checkedEither :: Within a n m => a -> Either String (Range n m a)
@@ -130,20 +121,18 @@ checkedEither x = do
     let sn = sing
         sm = sing
     case mk x sn sm of
-        Nothing -> Left $ errorMsg (fromSing sn) (fromSing sm)
+        Nothing -> Left (errorMsg (fromSing sn) (fromSing sm) "")
         Just  r -> Right r
 
 unsafeRange :: (Show a, Within a n m) => a -> Range n m a
-unsafeRange x = fromMaybe (errorMsg sing sing) (checked x)
+unsafeRange x = fromMaybe (msg sing sing) (checked x)
   where
-    errorMsg :: SNat n -> SNat m -> Range n m a
-    errorMsg n m = error $ shows x
-                         . showString " is outside range ["
-                         . shows (fromSing n)
-                         . showString ", "
-                         . shows (fromSing m)
-                         . showString "]"
-                         $ ""
+    msg :: SNat n -> SNat m -> Range n m a
+    msg sn sm = error
+            . shows x
+            . showString " "
+            . errorMsg (fromSing sn) (fromSing sm)
+            $ ""
 
 rcast :: (LTE n m, (m :<= m') ~ 'True, (n :>= n') ~ 'True) => Range n m a -> Range n' m' a
 rcast (Range a) = Range a
@@ -245,15 +234,10 @@ instance (Within a n m, Read a) => Read (Range n m a) where
 -----------------------------------------------------------------------------
 
 instance (Within a n m, FromByteString a) => FromByteString (Range n m a) where
-    parser = parser >>= maybe (errorMsg sing sing) return . checked
+    parser = parser >>= maybe (msg sing sing) return . checked
       where
-        errorMsg :: Bounds a => SNat n -> SNat m -> Atto.Parser (Range n m a)
-        errorMsg n m = fail $ showString "outside range ["
-                            . shows (fromSing n)
-                            . showString ", "
-                            . shows (fromSing m)
-                            . showString "]"
-                            $ ""
+        msg :: Bounds a => SNat n -> SNat m -> Atto.Parser (Range n m a)
+        msg sn sm = fail (errorMsg (fromSing sn) (fromSing sm) "")
 
 instance ToByteString a => ToByteString (Range n m a) where
     builder = builder . fromRange
