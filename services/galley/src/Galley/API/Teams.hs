@@ -3,15 +3,14 @@
 {-# LANGUAGE TypeOperators     #-}
 
 module Galley.API.Teams
-    ( getTeam
+    ( createTeam
+    , getTeam
     , getManyTeams
-    , createTeam
-    , deleteTeam
-    , updateTeam
+    --, deleteTeam
+    , addTeamMember
     , getTeamMembers
-    , updateTeamMembers
-    , getTeamConvs
-    , updateTeamConvs
+    , deleteTeamMember
+    , getTeamConversations
     ) where
 
 import Cassandra (result, hasMore)
@@ -19,6 +18,7 @@ import Control.Lens
 import Control.Monad (unless)
 import Control.Monad.Catch
 import Data.ByteString.Conversion
+import Data.Foldable (for_)
 import Data.Int
 import Data.Id
 import Data.Maybe (catMaybes)
@@ -40,7 +40,7 @@ getTeam :: UserId ::: TeamId ::: JSON -> Galley Response
 getTeam (zusr::: tid ::: _) =
     maybe (throwM teamNotFound) (pure . json) =<< lookupTeam zusr tid
 
-getManyTeams :: UserId ::: Maybe (Either (Range 1 32 (List TeamId)) TeamId) ::: Range 1 500 Int32 ::: JSON -> Galley Response
+getManyTeams :: UserId ::: Maybe (Either (Range 1 32 (List TeamId)) TeamId) ::: Range 1 100 Int32 ::: JSON -> Galley Response
 getManyTeams (zusr ::: range ::: size ::: _) =
     withTeamIds zusr range size $ \more ids -> do
         teams <- mapM (lookupTeam zusr) ids
@@ -54,30 +54,17 @@ lookupTeam zusr tid = do
 createTeam :: UserId ::: Request ::: JSON -> Galley Response
 createTeam (zusr::: req ::: _) = do
     body <- fromBody req invalidPayload
-    team <- Data.createTeam zusr
-                (body^.newTeamName)
-                (body^.newTeamIcon)
-                (body^.newTeamIconKey)
-                (body^.newTeamMembers)
+    team <- Data.createTeam zusr (body^.newTeamName) (body^.newTeamIcon) (body^.newTeamIconKey)
+    let owner  = newTeamMember zusr fullPermissions
+    let others = filter ((zusr /=) . view userId)
+               . maybe [] fromRange
+               $ body^.newTeamMembers
+    for_ (owner : others) $
+        Data.addTeamMember (team^.teamId)
     pure (empty & setStatus status201 . location (team^.teamId))
 
-deleteTeam :: UserId ::: TeamId ::: JSON -> Galley Response
-deleteTeam (zusr::: tid ::: _) = undefined
-
-updateTeam :: UserId ::: TeamId ::: Request ::: JSON -> Galley Response
-updateTeam (zusr::: tid ::: req ::: _) = do
-    body <- fromBody req invalidPayload
-    mems <- Data.teamMembers tid
-    case findTeamMember zusr mems of
-        Nothing -> throwM teamNotFound
-        Just m  -> do
-            add mems (body^.addTeamMembers)
-            del mems (body^.delTeamMembers)
-  where
-    add _   Nothing   = pure ()
-    add mm (Just new) = do
-        unless (m `hasPermission` AddTeamMember) $
-            throwM (operationDenied AddTeamMember)
+--deleteTeam :: UserId ::: TeamId ::: JSON -> Galley Response
+--deleteTeam (zusr::: tid ::: _) = undefined
 
 getTeamMembers :: UserId ::: TeamId ::: JSON -> Galley Response
 getTeamMembers (zusr::: tid ::: _) = do
@@ -88,19 +75,35 @@ getTeamMembers (zusr::: tid ::: _) = do
             let withPerm = m `hasPermission` GetMemberPermissions
             pure (json $ teamMemberListJson withPerm (newTeamMemberList mm))
 
-updateTeamMembers :: UserId ::: TeamId ::: Request ::: JSON -> Galley Response
-updateTeamMembers (zusr::: tid ::: req ::: _) = undefined
+addTeamMember :: UserId ::: TeamId ::: Request ::: JSON -> Galley Response
+addTeamMember (zusr::: tid ::: req ::: _) = do
+    m <- Data.teamMember tid zusr >>= ifNothing teamNotFound
+    unless (m `hasPermission` AddTeamMember) $
+        throwM (operationDenied AddTeamMember)
+    body <- fromBody req invalidPayload
+    Data.addTeamMember tid (body^.ntmNewTeamMember)
+    cc <- filter (view managedConversation) <$> Data.teamConversations tid
+    for_ cc $ \c ->
+        Data.addMember (c^.conversationId) (body^.ntmNewTeamMember.userId)
+    pure empty
 
-getTeamConvs :: UserId ::: TeamId ::: JSON -> Galley Response
-getTeamConvs (zusr::: tid ::: _) = do
+deleteTeamMember :: UserId ::: TeamId ::: UserId ::: JSON -> Galley Response
+deleteTeamMember (zusr::: tid ::: remove ::: _) = do
+    m <- Data.teamMember tid zusr >>= ifNothing teamNotFound
+    unless (m `hasPermission` RemoveTeamMember) $
+        throwM (operationDenied RemoveTeamMember)
+    Data.removeTeamMember tid remove
+    cc <- filter (view managedConversation) <$> Data.teamConversations tid
+    for_ cc $ \c ->
+        Data.removeMember remove (c^.conversationId)
+    pure empty
+
+getTeamConversations :: UserId ::: TeamId ::: JSON -> Galley Response
+getTeamConversations (zusr::: tid ::: _) = do
     tm <- Data.teamMember tid zusr >>= ifNothing teamNotFound
     unless (tm `hasPermission` GetTeamConversations) $
         throwM (operationDenied GetTeamConversations)
-    tc <- map newTeamConversation <$> Data.teamConversationIds tid
-    pure (json $ newTeamConversationList tc)
-
-updateTeamConvs :: UserId ::: TeamId ::: Request ::: JSON -> Galley Response
-updateTeamConvs (zusr::: tid ::: req ::: _) = undefined
+    json . newTeamConversationList <$> Data.teamConversations tid
 
 -- Internal -----------------------------------------------------------------
 
@@ -116,7 +119,7 @@ updateTeamConvs (zusr::: tid ::: req ::: _) = undefined
 -- always false if the third lookup-case is used).
 withTeamIds :: UserId
             -> Maybe (Either (Range 1 32 (List TeamId)) TeamId)
-            -> Range 1 500 Int32
+            -> Range 1 100 Int32
             -> (Bool -> [TeamId] -> Galley Response)
             -> Galley Response
 withTeamIds usr range size k = case range of

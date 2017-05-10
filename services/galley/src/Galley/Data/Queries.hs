@@ -23,8 +23,11 @@ import qualified Data.Text.Lazy as LT
 selectTeam :: PrepQuery R (Identity TeamId) (UserId, Text, Text, Maybe Text)
 selectTeam = "select creator, name, icon, icon_key from team where team = ?"
 
-selectTeamConvs :: PrepQuery R (Identity TeamId) (Identity ConvId)
-selectTeamConvs = "select conv from team_conv where team = ? order by conv"
+selectTeamConv :: PrepQuery R (TeamId, ConvId) (Identity Bool)
+selectTeamConv = "select managed from team_conv where team = ? and conv = ?"
+
+selectTeamConvs :: PrepQuery R (Identity TeamId) (ConvId, Bool)
+selectTeamConvs = "select conv, managed from team_conv where team = ? order by conv"
 
 selectTeamMember :: PrepQuery R (TeamId, UserId) (Identity Permissions)
 selectTeamMember = "select perms from team_member where team = ? and user = ?"
@@ -44,8 +47,8 @@ selectUserTeamsFrom = "select team from user_team where user = ? and team > ? or
 insertTeam :: PrepQuery W (TeamId, UserId, Text, Text, Maybe Text) ()
 insertTeam = "insert into team (team, creator, name, icon, icon_key) values (?, ?, ?, ?, ?)"
 
-insertTeamConv :: PrepQuery W (TeamId, ConvId) ()
-insertTeamConv = "insert into team_conv (team, conv) values (?, ?)"
+insertTeamConv :: PrepQuery W (TeamId, ConvId, Bool) ()
+insertTeamConv = "insert into team_conv (team, conv, managed) values (?, ?, ?)"
 
 deleteTeamConv :: PrepQuery W (TeamId, ConvId) ()
 deleteTeamConv = "delete from team_conv where team = ? and conv = ?"
@@ -53,8 +56,8 @@ deleteTeamConv = "delete from team_conv where team = ? and conv = ?"
 insertTeamMember :: PrepQuery W (TeamId, UserId, Permissions) ()
 insertTeamMember = "insert into team_member (team, user, perms) values (?, ?, ?)"
 
-removeTeamMember :: PrepQuery W (TeamId, UserId) ()
-removeTeamMember = "delete from team_member where team = ? and user = ?"
+deleteTeamMember :: PrepQuery W (TeamId, UserId) ()
+deleteTeamMember = "delete from team_member where team = ? and user = ?"
 
 updatePermissions :: PrepQuery W (Permissions, TeamId, UserId) ()
 updatePermissions = "update team_member set perms = ? where team = ? and user = ?"
@@ -67,13 +70,13 @@ deleteUserTeam = "delete from user_team where user = ? and team = ?"
 
 -- Conversations ------------------------------------------------------------
 
-selectConv :: PrepQuery R (Identity ConvId) (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe ConvTeamInfo)
+selectConv :: PrepQuery R (Identity ConvId) (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId)
 selectConv = "select type, creator, access, name, team from conversation where conv = ?"
 
-selectConvs :: PrepQuery R (Identity [ConvId]) (ConvId, ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe ConvTeamInfo)
+selectConvs :: PrepQuery R (Identity [ConvId]) (ConvId, ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId)
 selectConvs = "select conv, type, creator, access, name, team from conversation where conv in ?"
 
-insertConv :: PrepQuery W (ConvId, ConvType, UserId, Set Access, Maybe Text, Maybe ConvTeamInfo) ()
+insertConv :: PrepQuery W (ConvId, ConvType, UserId, Set Access, Maybe Text, Maybe TeamId) ()
 insertConv = "insert into conversation (conv, type, creator, access, name, team) values (?, ?, ?, ?, ?, ?)"
 
 updateConvName :: PrepQuery W (Text, ConvId) ()

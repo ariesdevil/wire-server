@@ -68,53 +68,47 @@ run o = do
 
 sitemap :: Routes ApiBuilder Galley ()
 sitemap = do
+    post "/teams" (continue createTeam) $
+        zauthUserId
+        .&. request
+        .&. contentType "application" "json"
+
     get "/teams" (continue getManyTeams) $
         zauthUserId
         .&. opt (query "ids" ||| query "start")
         .&. def (unsafeRange 100) (query "size")
         .&. accept "application" "json"
 
-    post "/teams" (continue createTeam) $
-        zauthUserId
-        .&. request
-        .&. contentType "application" "json"
-
     get "/teams/:tid" (continue getTeam) $
         zauthUserId
         .&. capture "tid"
         .&. accept "application" "json"
 
-    delete "/teams/:tid" (continue deleteTeam) $
-        zauthUserId
-        .&. capture "tid"
-        .&. accept "application" "json"
-
-    put "/teams/:tid" (continue updateTeam) $
-        zauthUserId
-        .&. capture "tid"
-        .&. request
-        .&. accept "application" "json"
+--    delete "/teams/:tid" (continue deleteTeam) $
+--        zauthUserId
+--        .&. capture "tid"
+--        .&. accept "application" "json"
 
     get "/teams/:tid/members" (continue getTeamMembers) $
         zauthUserId
         .&. capture "tid"
         .&. accept "application" "json"
 
-    put "/teams/:tid/members" (continue updateTeamMembers) $
+    post "/teams/:tid/members" (continue addTeamMember) $
         zauthUserId
         .&. capture "tid"
         .&. request
         .&. accept "application" "json"
 
-    get "/teams/:tid/conversations" (continue getTeamConvs) $
+    delete "/teams/:tid/members/:uid" (continue deleteTeamMember) $
         zauthUserId
         .&. capture "tid"
+        .&. capture "uid"
         .&. accept "application" "json"
 
-    put "/teams/:tid/conversations" (continue updateTeamConvs) $
+    get "/teams/:tid/conversations" (continue getTeamConversations) $
         zauthUserId
         .&. capture "tid"
-        .&. request
         .&. accept "application" "json"
 
    --

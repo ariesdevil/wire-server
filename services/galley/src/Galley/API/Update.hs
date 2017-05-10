@@ -35,7 +35,7 @@ module Galley.API.Update
 
 import Control.Applicative hiding (empty)
 import Control.Concurrent.Lifted (fork)
-import Control.Lens ((&), (.~), (?~), (^.), (<&>), set)
+import Control.Lens ((&), (.~), (?~), (^.), (<&>), set, view)
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.IO.Class
@@ -84,7 +84,7 @@ blockConv (usr ::: cnv) = do
     unless (Data.convType conv `elem` [ConnectConv, One2OneConv]) $
         throwM $ invalidOp "block: invalid conversation type"
     let mems  = Data.convMembers conv
-    if | usr `isMember` mems -> Data.deleteMember usr cnv
+    if | usr `isMember` mems -> Data.removeMember usr cnv
        | otherwise           -> return ()
     return empty
 
@@ -125,11 +125,14 @@ addMembers (zusr ::: zcon ::: cid ::: req ::: _) = do
             throwM accessDenied
         ensureConnected zusr (fromRange to_add)
 
-    teamConvChecks conv tinfo to_add = do
+    teamConvChecks conv tid to_add = do
         unless (InviteAccess `elem` Data.convAccess conv) $
             throwM accessDenied
-        tms <- Data.teamMembers (cnvTeamId tinfo)
+        tms <- Data.teamMembers tid
         permissionCheck zusr AddConversationMember tms
+        tcv <- Data.teamConversation tid cid
+        when (maybe False (view managedConversation) tcv) $
+            throwM (invalidOp "Users can not be added to managed conversations.")
         ensureConnected zusr (notSameTeam (fromRange to_add) tms)
 
 updateMember :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Response
@@ -169,7 +172,7 @@ removeMember (zusr ::: zcon ::: cid ::: victim) = do
         ConnectConv -> throwM invalidConnectOp
         _           -> return ()
     if victim `isMember` users then do
-        e <- Data.rmMembers conv zusr (singleton victim)
+        e <- Data.removeMembers conv zusr (singleton victim)
         for_ (newPush e (recipient <$> users)) $ \p ->
             push1 $ p & pushConn ?~ zcon
         void . fork $ void $ External.deliver (bots `zip` repeat e)
@@ -180,8 +183,11 @@ removeMember (zusr ::: zcon ::: cid ::: victim) = do
     regularConvChecks users =
         unless (zusr `isMember` users) $ throwM convNotFound
 
-    teamConvChecks tinfo =
-        permissionCheck zusr RemoveConversationMember =<< Data.teamMembers (cnvTeamId tinfo)
+    teamConvChecks tid = do
+        permissionCheck zusr RemoveConversationMember =<< Data.teamMembers tid
+        tcv <- Data.teamConversation tid cid
+        when (maybe False (view managedConversation) tcv) $
+            throwM (invalidOp "Users can not be removed from managed conversations.")
 
 postBotMessage :: BotId ::: ConvId ::: OtrFilterMissing ::: Request ::: JSON ::: JSON -> Galley Response
 postBotMessage (zbot ::: zcnv ::: val ::: req ::: _) = do
@@ -301,7 +307,7 @@ rmBot (zusr ::: zcon ::: req ::: _) = do
             let e = Event MemberLeave (Data.convId c) zusr t evd
             for_ (newPush e (recipient <$> users)) $ \p ->
                 push1 $ p & pushConn .~ zcon
-            Data.deleteMember (botUserId (b^.rmBotId)) (Data.convId c)
+            Data.removeMember (botUserId (b^.rmBotId)) (Data.convId c)
             Data.eraseClients (botUserId (b^.rmBotId))
             void . fork $ void $ External.deliver (bots `zip` repeat e)
             return (json e)

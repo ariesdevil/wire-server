@@ -50,15 +50,18 @@ createGroupConversation (zusr::: zcon ::: req ::: _) = do
     createTeamConv tinfo body = do
         tms <- Data.teamMembers (cnvTeamId tinfo)
         permissionCheck zusr CreateConversation tms
-        case newConvUsers body of
-            [] -> action body (rcast rnil)
-            uu -> do
-                when (cnvManaged tinfo) $
-                    throwM noAddToManaged
-                permissionCheck zusr AddConversationMember tms
-                uids <- rangeChecked uu :: Galley (Range 1 64 [UserId])
-                ensureConnected zusr (notSameTeam (fromRange uids) tms)
-                action body (rcast uids)
+        if cnvManaged tinfo then do
+            let uu = filter (/= zusr) $ map (view userId) tms
+            uids <- rangeChecked uu :: Galley (Range 0 127 [UserId])
+            action body uids
+        else do
+            permissionCheck zusr AddConversationMember tms
+            case newConvUsers body of
+                [] -> action body (rcast rnil)
+                uu -> do
+                    uids <- rangeChecked uu :: Galley (Range 1 64 [UserId])
+                    ensureConnected zusr (notSameTeam (fromRange uids) tms)
+                    action body (rcast uids)
 
     createRegularConv body = case newConvUsers body of
         [] -> action body (rcast rnil)

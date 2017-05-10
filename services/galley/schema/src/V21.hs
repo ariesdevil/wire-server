@@ -21,8 +21,9 @@ migration = Migration 21 "Add teams" $ do
 
     schema' [r|
         CREATE TABLE team_conv (
-            team  uuid,
-            conv  uuid
+            team    uuid,
+            conv    uuid,
+            managed boolean
             PRIMARY KEY (team, conv)
         ) WITH CLUSTERING ORDER BY (conv ASC)
             AND compaction = {'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}
@@ -52,7 +53,5 @@ migration = Migration 21 "Add teams" $ do
             AND gc_grace_seconds = 864000;
         |]
 
-    schema' [r| CREATE TYPE teaminfo (teamid uuid, managed boolean); |]
-
-    schema' [r| ALTER TABLE conversation ADD team frozen<teaminfo>; |]
+    schema' [r| ALTER TABLE conversation ADD team uuid; |]
 

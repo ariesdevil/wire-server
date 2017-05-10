@@ -74,12 +74,7 @@ data Conversation = Conversation
     , cnvAccess    :: !(List1 Access)
     , cnvName      :: !(Maybe Text)
     , cnvMembers   :: !ConvMembers
-    , cnvTeam      :: !(Maybe ConvTeamInfo)
-    } deriving (Eq, Show)
-
-data ConvTeamInfo = ConvTeamInfo
-    { cnvTeamId  :: !TeamId
-    , cnvManaged :: !Bool
+    , cnvTeam      :: !(Maybe TeamId)
     } deriving (Eq, Show)
 
 data ConvType
@@ -106,7 +101,7 @@ data ConversationMeta = ConversationMeta
     , cmCreator :: !UserId
     , cmAccess  :: !(List1 Access)
     , cmName    :: !(Maybe Text)
-    , cmTeam    :: !(Maybe ConvTeamInfo)
+    , cmTeam    :: !(Maybe TeamId)
     } deriving (Eq, Show)
 
 data ConversationList a = ConversationList
@@ -120,6 +115,11 @@ newtype ConversationRename = ConversationRename
 
 deriving instance Eq   ConversationRename
 deriving instance Show ConversationRename
+
+data ConvTeamInfo = ConvTeamInfo
+    { cnvTeamId  :: !TeamId
+    , cnvManaged :: !Bool
+    } deriving (Eq, Show)
 
 data NewConv = NewConv
     { newConvUsers  :: ![UserId]
