@@ -7,7 +7,7 @@ import Bilge.Assert
 import Brig.Types
 import Control.Applicative hiding (empty)
 import Control.Error
-import Control.Lens ((&), (?~))
+import Control.Lens hiding ((.=), from, to)
 import Control.Monad hiding (mapM_)
 import Control.Monad.IO.Class
 import Data.Aeson hiding (json)
@@ -20,12 +20,14 @@ import Data.List1 as List1
 import Data.Maybe
 import Data.Monoid
 import Data.ProtocolBuffers (encodeMessage)
+import Data.Range
 import Data.Set (Set)
 import Data.Serialize (runPut)
 import Data.Text (Text)
 import Data.Text.Encoding (decodeUtf8)
 import Data.UUID.V4
 import Galley.Types
+import Galley.Types.Teams
 import Gundeck.Types.Notification
 import Gundeck.Types.Push
 import Prelude hiding (head, mapM_)
@@ -34,15 +36,17 @@ import Test.Tasty.HUnit
 
 import Debug.Trace (traceShow)
 
-import qualified Data.ByteString.Base64      as B64
-import qualified Data.ByteString.Char8       as C
-import qualified Data.ByteString.Lazy        as Lazy
-import qualified Data.HashMap.Strict         as HashMap
-import qualified Data.Map.Strict             as Map
-import qualified Data.Set                    as Set
-import qualified Data.UUID                   as UUID
-import qualified Galley.Types.Proto          as Proto
-import qualified Test.Tasty.Cannon           as WS
+import qualified Data.ByteString.Base64 as B64
+import qualified Data.ByteString.Char8  as C
+import qualified Data.ByteString.Lazy   as Lazy
+import qualified Data.HashMap.Strict    as HashMap
+import qualified Data.Map.Strict        as Map
+import qualified Data.Set               as Set
+import qualified Data.Text              as T
+import qualified Data.UUID              as UUID
+import qualified Galley.Types.Proto     as Proto
+import qualified Test.QuickCheck        as Q
+import qualified Test.Tasty.Cannon      as WS
 
 type Galley      = Request -> Request
 type Brig        = Request -> Request
@@ -53,6 +57,16 @@ test m s h = testCase s (runHttpT m h)
 
 -------------------------------------------------------------------------------
 -- API Operations
+
+createTeam :: Text -> UserId -> [TeamMember] -> Galley -> Http TeamId
+createTeam name owner mems g = do
+    icon  <- T.pack . take 64 <$> genRandom
+    let mm = if null mems then Nothing else Just $ unsafeRange (take 127 mems)
+    let nt = newNewTeam (unsafeRange name) (unsafeRange icon) & newTeamMembers .~ mm
+    resp <- post (g . path "/teams" . zUser owner . zConn "conn" . zType "access" . json nt) <!! do
+        const 201  === statusCode
+        const True === isJust . getHeader "Location"
+    fromBS (getHeader' "Location" resp)
 
 postConv :: Galley -> UserId -> [UserId] -> Maybe Text -> [Access] -> Http ResponseLBS
 postConv g u us name a = do
@@ -212,19 +226,19 @@ assertConv :: Response (Maybe Lazy.ByteString)
 assertConv r t c s us n = do
     cId <- fromBS $ getHeader' "Location" r
     let cnv = decodeBody r :: Maybe Conversation
-    let self = cmSelf . cnvMembers <$> cnv
+    let _self = cmSelf . cnvMembers <$> cnv
     let others = cmOthers . cnvMembers <$> cnv
     liftIO $ do
         assertEqual "id" (Just cId) (cnvId <$> cnv)
         assertEqual "name" n (cnv >>= cnvName)
         assertEqual "type" (Just t) (cnvType <$> cnv)
         assertEqual "creator" (Just c) (cnvCreator <$> cnv)
-        assertEqual "self" (Just s) (memId <$> self)
+        assertEqual "self" (Just s) (memId <$> _self)
         assertEqual "others" (Just $ Set.fromList us) (Set.fromList . map omId . toList <$> others)
-        assertBool  "otr muted not false" (Just False == (memOtrMuted <$> self))
-        assertBool  "otr muted ref not empty" (isNothing (memOtrMutedRef =<< self))
-        assertBool  "otr archived not false" (Just False == (memOtrArchived <$> self))
-        assertBool  "otr archived ref not empty" (isNothing (memOtrArchivedRef =<< self))
+        assertBool  "otr muted not false" (Just False == (memOtrMuted <$> _self))
+        assertBool  "otr muted ref not empty" (isNothing (memOtrMutedRef =<< _self))
+        assertBool  "otr archived not false" (Just False == (memOtrArchived <$> _self))
+        assertBool  "otr archived ref not empty" (isNothing (memOtrArchivedRef =<< _self))
         case t of
             SelfConv    -> assertEqual "access" (Just privateAccess) (cnvAccess <$> cnv)
             ConnectConv -> assertEqual "access" (Just privateAccess) (cnvAccess <$> cnv)
@@ -409,3 +423,5 @@ encodeCiphertext = decodeUtf8 . B64.encode
 memberUpdate :: MemberUpdate
 memberUpdate = MemberUpdate Nothing Nothing Nothing Nothing Nothing Nothing
 
+genRandom :: (Q.Arbitrary a, MonadIO m) => m a
+genRandom = liftIO . Q.generate $ Q.arbitrary

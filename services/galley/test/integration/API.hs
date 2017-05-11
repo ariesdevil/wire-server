@@ -28,6 +28,7 @@ import Test.Tasty
 import Test.Tasty.Cannon (Cannon, TimeoutUnit (..), (#))
 import Test.Tasty.HUnit
 
+import qualified API.Teams                as Teams
 import qualified Control.Concurrent.Async as Async
 import qualified Data.List1               as List1
 import qualified Data.Map.Strict          as Map
@@ -38,8 +39,9 @@ import qualified Test.Tasty.Cannon        as WS
 tests :: Galley -> Brig -> Cannon -> IO TestTree
 tests g b c = do
     m <- newManager defaultManagerSettings
-    return $ testGroup "User API"
-        [ test m "status" (status g)
+    return $ testGroup "User API" $
+        [ Teams.tests g b m
+        , test m "status" (status g)
         , test m "monitoring" (monitor g)
         , test m "create conversation" (postConvOk g b c)
         , test m "get empty conversations" (getConvsOk g b)

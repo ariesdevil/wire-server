@@ -59,6 +59,7 @@ createTeam (zusr::: req ::: _) = do
     let others = filter ((zusr /=) . view userId)
                . maybe [] fromRange
                $ body^.newTeamMembers
+    ensureConnected zusr (map (view userId) others)
     for_ (owner : others) $
         Data.addTeamMember (team^.teamId)
     pure (empty & setStatus status201 . location (team^.teamId))

@@ -150,6 +150,7 @@ test-suite galley-integration
 
     other-modules:
         API
+        API.Teams
         API.Util
 
     build-depends:
@@ -176,6 +177,7 @@ test-suite galley-integration
       , lens
       , network
       , protobuf
+      , QuickCheck
       , transformers
       , tasty                >= 0.8
       , tasty-cannon         >= 0.3.2
