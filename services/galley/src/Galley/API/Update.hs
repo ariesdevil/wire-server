@@ -111,21 +111,21 @@ addMembers (zusr ::: zcon ::: cid ::: req ::: _) = do
     conv <- Data.conversation cid >>= ifNothing convNotFound
     let mems = botsAndUsers (Data.convMembers conv)
     to_add <- rangeChecked (toList $ invUsers body) :: Galley (Range 1 128 [UserId])
-    case Data.convTeam conv of
-        Nothing -> regularConvChecks conv (snd mems) to_add
-        Just ti -> teamConvChecks conv ti to_add
     let new_users = filter (notIsMember conv) (fromRange to_add)
-    ensureMemberLimit (toList $ Data.convMembers conv) new_users
+    case Data.convTeam conv of
+        Nothing -> regularConvChecks conv (snd mems) to_add new_users
+        Just ti -> teamConvChecks conv ti to_add new_users
     addToConversation mems zusr zcon new_users conv
   where
-    regularConvChecks conv mems to_add = do
+    regularConvChecks conv mems to_add new_users = do
         unless (zusr `isMember` mems) $
             throwM convNotFound
         unless (InviteAccess `elem` Data.convAccess conv) $
             throwM accessDenied
+        ensureMemberLimit (toList $ Data.convMembers conv) new_users
         ensureConnected zusr (fromRange to_add)
 
-    teamConvChecks conv tid to_add = do
+    teamConvChecks conv tid to_add new_users = do
         unless (InviteAccess `elem` Data.convAccess conv) $
             throwM accessDenied
         tms <- Data.teamMembers tid
@@ -133,6 +133,7 @@ addMembers (zusr ::: zcon ::: cid ::: req ::: _) = do
         tcv <- Data.teamConversation tid cid
         when (maybe False (view managedConversation) tcv) $
             throwM (invalidOp "Users can not be added to managed conversations.")
+        ensureMemberLimit (toList $ Data.convMembers conv) new_users
         ensureConnected zusr (notSameTeam (fromRange to_add) tms)
 
 updateMember :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Response
