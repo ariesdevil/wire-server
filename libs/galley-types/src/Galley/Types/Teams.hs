@@ -92,7 +92,7 @@ data TeamList = TeamList
 data TeamMember = TeamMember
     { _userId      :: UserId
     , _permissions :: Permissions
-    } deriving (Eq, Show)
+    } deriving (Eq, Ord, Show)
 
 newtype TeamMemberList = TeamMemberList
     { _teamMembers :: [TeamMember]

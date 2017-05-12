@@ -58,6 +58,9 @@ test m s h = testCase s (runHttpT m h)
 -------------------------------------------------------------------------------
 -- API Operations
 
+symmPermissions :: [Perm] -> Permissions
+symmPermissions p = let s = Set.fromList p in fromJust (newPermissions s s)
+
 createTeam :: Text -> UserId -> [TeamMember] -> Galley -> Http TeamId
 createTeam name owner mems g = do
     icon  <- T.pack . take 64 <$> genRandom
@@ -67,6 +70,16 @@ createTeam name owner mems g = do
         const 201  === statusCode
         const True === isJust . getHeader "Location"
     fromBS (getHeader' "Location" resp)
+
+getTeam :: UserId -> TeamId -> Galley -> Http Team
+getTeam usr tid g = do
+    r <- get (g . paths ["teams", toByteString' tid] . zUser usr) <!! const 200 === statusCode
+    pure (fromJust (decodeBody r))
+
+getTeamMembers :: UserId -> TeamId -> Galley -> Http TeamMemberList
+getTeamMembers usr tid g = do
+    r <- get (g . paths ["teams", toByteString' tid, "members"] . zUser usr) <!! const 200 === statusCode
+    pure (fromJust (decodeBody r))
 
 postConv :: Galley -> UserId -> [UserId] -> Maybe Text -> [Access] -> Http ResponseLBS
 postConv g u us name a = do
