@@ -177,7 +177,7 @@ newPermissions a b
     | otherwise            = Nothing
 
 fullPermissions :: Permissions
-fullPermissions = let p = intToPerms (maxBound - 1) in Permissions p p
+fullPermissions = let p = intToPerms maxBound in Permissions p p
 
 hasPermission :: TeamMember -> Perm -> Bool
 hasPermission tm p = p `Set.member` (tm^.permissions.self)

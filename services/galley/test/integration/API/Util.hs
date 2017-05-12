@@ -61,25 +61,42 @@ test m s h = testCase s (runHttpT m h)
 symmPermissions :: [Perm] -> Permissions
 symmPermissions p = let s = Set.fromList p in fromJust (newPermissions s s)
 
-createTeam :: Text -> UserId -> [TeamMember] -> Galley -> Http TeamId
-createTeam name owner mems g = do
-    icon  <- T.pack . take 64 <$> genRandom
+createTeam :: Galley -> Text -> UserId -> [TeamMember] -> Http TeamId
+createTeam g name owner mems = do
     let mm = if null mems then Nothing else Just $ unsafeRange (take 127 mems)
-    let nt = newNewTeam (unsafeRange name) (unsafeRange icon) & newTeamMembers .~ mm
+    let nt = newNewTeam (unsafeRange name) (unsafeRange "icon") & newTeamMembers .~ mm
     resp <- post (g . path "/teams" . zUser owner . zConn "conn" . zType "access" . json nt) <!! do
         const 201  === statusCode
         const True === isJust . getHeader "Location"
     fromBS (getHeader' "Location" resp)
 
-getTeam :: UserId -> TeamId -> Galley -> Http Team
-getTeam usr tid g = do
+getTeam :: Galley -> UserId -> TeamId -> Http Team
+getTeam g usr tid = do
     r <- get (g . paths ["teams", toByteString' tid] . zUser usr) <!! const 200 === statusCode
     pure (fromJust (decodeBody r))
 
-getTeamMembers :: UserId -> TeamId -> Galley -> Http TeamMemberList
-getTeamMembers usr tid g = do
+getTeamMembers :: Galley -> UserId -> TeamId -> Http TeamMemberList
+getTeamMembers g usr tid = do
     r <- get (g . paths ["teams", toByteString' tid, "members"] . zUser usr) <!! const 200 === statusCode
     pure (fromJust (decodeBody r))
+
+addTeamMember :: Galley -> UserId -> TeamId -> TeamMember -> Http ()
+addTeamMember g usr tid mem = do
+    let payload = json (newNewTeamMember mem)
+    post (g . paths ["teams", toByteString' tid, "members"] . zUser usr . payload) !!!
+        const 200 === statusCode
+
+createTeamConv :: Galley -> UserId -> ConvTeamInfo -> [UserId] -> Maybe Text -> Http ConvId
+createTeamConv g u tinfo us name = do
+    let conv = NewConv us name (Set.fromList []) (Just tinfo)
+    r <- post ( g
+              . path "/conversations"
+              . zUser u
+              . zConn "conn"
+              . zType "access"
+              . json conv
+              ) <!! const 201 === statusCode
+    fromBS (getHeader' "Location" r)
 
 postConv :: Galley -> UserId -> [UserId] -> Maybe Text -> [Access] -> Http ResponseLBS
 postConv g u us name a = do
@@ -211,6 +228,18 @@ deleteClient g u c = delete $ g
 
 deleteUser :: Galley -> UserId -> Http ()
 deleteUser g u = delete (g . path "/i/user" . zUser u) !!! const 200 === statusCode
+
+assertConvMember :: Galley -> UserId -> ConvId -> Http ()
+assertConvMember g u c =
+    getSelfMember g u c !!! do
+        const 200      === statusCode
+        const (Just u) === (fmap memId <$> decodeBody)
+
+assertNotConvMember :: Galley -> UserId -> ConvId -> Http ()
+assertNotConvMember g u c =
+    getSelfMember g u c !!! do
+        const 200         === statusCode
+        const (Just Null) === decodeBody
 
 -------------------------------------------------------------------------------
 -- Common Assertions
