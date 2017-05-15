@@ -22,6 +22,8 @@ module Galley.Data
     , teamMember
     , teamMembers
     , userTeams
+    , isTeamAlive
+    , deleteTeam
 
     -- * Conversations
     , Conversation (..)
@@ -35,7 +37,9 @@ module Galley.Data
     , createConversation
     , createOne2OneConversation
     , createSelfConversation
+    , isConvAlive
     , updateConversation
+    , deleteConversation
 
     -- * Conversation Members
     , addMember
@@ -106,11 +110,21 @@ schemaVersion = 21
 
 -- Teams --------------------------------------------------------------------
 
-team :: MonadClient m => TeamId -> m (Maybe Team)
-team t =
-    fmap toTeam <$> retry x1 (query1 Cql.selectTeam (params Quorum (Identity t)))
+team :: MonadClient m => TeamId -> m (Maybe TeamData)
+team tid =
+    fmap toTeam <$> retry x1 (query1 Cql.selectTeam (params Quorum (Identity tid)))
   where
-    toTeam (u, n, i, k) = newTeam t u n i & teamIconKey .~ k
+    toTeam (u, n, i, k, d) =
+        let t = newTeam tid u n i & teamIconKey .~ k in
+        TeamData t d
+
+isTeamAlive :: MonadClient m => TeamId -> m Bool
+isTeamAlive tid = do
+    t <- team tid
+    case tdDeleted <$> t of
+        Nothing    -> pure False
+        Just True  -> pure False
+        Just False -> pure True
 
 teamIdsOf :: MonadClient m => UserId -> Range 1 32 (List TeamId) -> m [TeamId]
 teamIdsOf usr (fromList . fromRange -> tids) =
@@ -155,25 +169,49 @@ createTeam uid (fromRange -> n) (fromRange -> i) k = do
     retry x5 $ write Cql.insertTeam (params Quorum (tid, uid, n, i, fromRange <$> k))
     pure (newTeam tid uid n i & teamIconKey .~ (fromRange <$> k))
 
+deleteTeam :: MonadClient m => TeamId -> m ()
+deleteTeam tid = do
+    retry x5 $ write Cql.markTeamDeleted (params Quorum (Identity tid))
+    mm <- teamMembers tid
+    for_ mm $ removeTeamMember tid . view userId
+    cc <- teamConversations tid
+    for_ cc $ removeTeamConv tid . view conversationId
+    retry x5 $ write Cql.deleteTeam (params Quorum (Identity tid))
+
 addTeamMember :: MonadClient m => TeamId -> TeamMember -> m ()
-addTeamMember t m = do
+addTeamMember t m =
     retry x5 $ batch $ do
         setType BatchLogged
         setConsistency Quorum
         addPrepQuery Cql.insertTeamMember (t, m^.userId, m^.permissions)
         addPrepQuery Cql.insertUserTeam   (m^.userId, t)
-    pure ()
 
 removeTeamMember :: MonadClient m => TeamId -> UserId -> m ()
-removeTeamMember t m = do
+removeTeamMember t m =
     retry x5 $ batch $ do
         setType BatchLogged
         setConsistency Quorum
         addPrepQuery Cql.deleteTeamMember (t, m)
         addPrepQuery Cql.deleteUserTeam   (m, t)
-    pure ()
+
+removeTeamConv :: MonadClient m => TeamId -> ConvId -> m ()
+removeTeamConv tid cid = do
+    deleteConversation cid
+    retry x5 $ batch $ do
+        setType BatchLogged
+        setConsistency Quorum
+        addPrepQuery Cql.deleteTeamConv (tid, cid)
 
 -- Conversations ------------------------------------------------------------
+
+isConvAlive :: MonadClient m => ConvId -> m Bool
+isConvAlive cid = do
+    result <- retry x1 (query1 Cql.isConvDeleted (params Quorum (Identity cid)))
+    case runIdentity <$> result of
+        Nothing           -> pure False
+        Just Nothing      -> pure True
+        Just (Just True)  -> pure False
+        Just (Just False) -> pure True
 
 conversation :: (MonadBaseControl IO m, MonadClient m, Forall (Pure m))
              => ConvId
@@ -192,7 +230,7 @@ conversations ids = do
   where
     fetchConvs = do
         cs <- retry x1 $ query Cql.selectConvs (params Quorum (Identity ids))
-        let m = Map.fromList $ map (\(c,t,u,n,a,i) -> (c, (t,u,n,a,i))) cs
+        let m = Map.fromList $ map (\(c,t,u,n,a,i,d) -> (c, (t,u,n,a,i,d))) cs
         return $ map (`Map.lookup` m) ids
 
     flatten (i, c) cc = case c of
@@ -203,18 +241,18 @@ conversations ids = do
 
 toConv :: ConvId
        -> [Member]
-       -> Maybe (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId)
+       -> Maybe (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId, Maybe Bool)
        -> Maybe Conversation
 toConv cid mms conv =
     f mms <$> conv
   where
-    f ms (cty, uid, acc, nme, ti) = Conversation cid cty uid nme (defAccess cty acc) ms ti
+    f ms (cty, uid, acc, nme, ti, del) = Conversation cid cty uid nme (defAccess cty acc) ms ti del
 
 conversationMeta :: MonadClient m => ConvId -> m (Maybe ConversationMeta)
 conversationMeta conv = fmap toConvMeta <$>
     retry x1 (query1 Cql.selectConv (params Quorum (Identity conv)))
   where
-    toConvMeta (t, c, a, n, i) = ConversationMeta conv t c (defAccess t a) n i
+    toConvMeta (t, c, a, n, i, _) = ConversationMeta conv t c (defAccess t a) n i
 
 conversationIdsFrom :: MonadClient m => UserId -> Maybe ConvId -> Range 1 1000 Int32 -> m (ResultSet ConvId)
 conversationIdsFrom usr range (fromRange -> max) =
@@ -290,6 +328,13 @@ createOne2OneConversation a b name = do
 updateConversation :: MonadClient m => ConvId -> Range 1 256 Text -> m ()
 updateConversation cid name = retry x5 $ write Cql.updateConvName (params Quorum (fromRange name, cid))
 
+deleteConversation :: MonadClient m => ConvId -> m ()
+deleteConversation cid = do
+    retry x5 $ write Cql.markConvDeleted (params Quorum (Identity cid))
+    mm <- members cid
+    for_ mm $ \m -> removeMember (memId m) cid
+    retry x5 $ write Cql.deleteConv (params Quorum (Identity cid))
+
 acceptConnect :: MonadClient m => ConvId -> m ()
 acceptConnect cid = retry x5 $ write Cql.updateConvType (params Quorum (One2OneConv, cid))
 
@@ -312,6 +357,7 @@ newConv cid ct usr mems acc name tid = Conversation
     , convAccess  = acc
     , convMembers = mems
     , convTeam    = tid
+    , convDeleted = Nothing
     }
 
 defAccess :: ConvType -> Maybe (Set Access) -> List1 Access

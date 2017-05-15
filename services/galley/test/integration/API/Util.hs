@@ -42,7 +42,6 @@ import qualified Data.ByteString.Lazy   as Lazy
 import qualified Data.HashMap.Strict    as HashMap
 import qualified Data.Map.Strict        as Map
 import qualified Data.Set               as Set
-import qualified Data.Text              as T
 import qualified Data.UUID              as UUID
 import qualified Galley.Types.Proto     as Proto
 import qualified Test.QuickCheck        as Q

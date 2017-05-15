@@ -6,13 +6,11 @@ import API.Util (Galley, Brig, test, zUser)
 import Bilge
 import Bilge.Assert
 import Control.Lens
-import Control.Monad
 import Control.Monad.IO.Class
-import Data.Aeson hiding (json)
+import Data.Aeson (Value (Null))
 import Data.ByteString.Conversion
 import Data.Foldable (for_)
 import Data.List1
-import Data.Maybe
 import Galley.Types
 import Galley.Types.Teams
 import Test.Tasty
@@ -31,6 +29,7 @@ tests g b m = testGroup "Teams API"
     , test m "add team conversation" (testAddTeamConv g b)
     , test m "add managed team conversation ignores given users" (testAddTeamConvWithUsers g b)
     , test m "add team member to conversation without connection" (testAddTeamMemberToConv g b)
+    , test m "delete team" (testDeleteTeam g b)
     ]
 
 testCreateTeam :: Galley -> Brig -> Http ()
@@ -170,4 +169,44 @@ testAddTeamMemberToConv g b = do
     Util.postMembers g (mem3^.userId) (list1 (mem1^.userId) []) cid !!! do
         const 403                === statusCode
         const "operation-denied" === (Error.label . Util.decodeBody' "error label")
+
+testDeleteTeam :: Galley -> Brig -> Http ()
+testDeleteTeam g b = do
+    owner <- Util.randomUser b
+    let p = Util.symmPermissions [AddConversationMember]
+    member <- flip newTeamMember p <$> Util.randomUser b
+    extern <- Util.randomUser b
+    Util.connectUsers b owner (list1 (member^.userId) [extern])
+
+    tid  <- Util.createTeam g "foo" owner [member]
+    cid1 <- Util.createTeamConv g owner (ConvTeamInfo tid False) [] (Just "blaa")
+    cid2 <- Util.createTeamConv g owner (ConvTeamInfo tid True) [] (Just "blup")
+
+    Util.assertConvMember g owner cid2
+    Util.assertConvMember g (member^.userId) cid2
+    Util.assertNotConvMember g extern cid2
+
+    Util.postMembers g owner (list1 extern []) cid1 !!! const 200 === statusCode
+    Util.assertConvMember g owner cid1
+    Util.assertConvMember g extern cid1
+    Util.assertNotConvMember g (member^.userId) cid1
+
+    delete (g . paths ["teams", toByteString' tid] . zUser owner) !!!
+        const 200 === statusCode
+
+    get (g . paths ["teams", toByteString' tid] . zUser owner) !!!
+        const 404 === statusCode
+
+    get (g . paths ["teams", toByteString' tid, "members"] . zUser owner) !!!
+        const 404 === statusCode
+
+    get (g . paths ["teams", toByteString' tid, "conversations"] . zUser owner) !!!
+        const 404 === statusCode
+
+    for_ [owner, extern, member^.userId] $ \u ->
+        for_ [cid1, cid2] $ \c -> do
+            Util.getConv g u c !!! const 404 === statusCode
+            Util.getSelfMember g u c !!! do
+                const 200         === statusCode
+                const (Just Null) === Util.decodeBody
 

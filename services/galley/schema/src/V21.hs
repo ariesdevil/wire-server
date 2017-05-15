@@ -14,7 +14,8 @@ migration = Migration 21 "Add teams" $ do
             creator  uuid,
             name     text,
             icon     text,
-            icon_key text
+            icon_key text,
+            deleted  boolean
         ) WITH compaction = {'class': 'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}
             AND gc_grace_seconds = 864000;
         |]
@@ -54,4 +55,5 @@ migration = Migration 21 "Add teams" $ do
         |]
 
     schema' [r| ALTER TABLE conversation ADD team uuid; |]
+    schema' [r| ALTER TABLE conversation ADD deleted boolean; |]
 

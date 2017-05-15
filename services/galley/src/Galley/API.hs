@@ -84,10 +84,10 @@ sitemap = do
         .&. capture "tid"
         .&. accept "application" "json"
 
---    delete "/teams/:tid" (continue deleteTeam) $
---        zauthUserId
---        .&. capture "tid"
---        .&. accept "application" "json"
+    delete "/teams/:tid" (continue deleteTeam) $
+        zauthUserId
+        .&. capture "tid"
+        .&. accept "application" "json"
 
     get "/teams/:tid/members" (continue getTeamMembers) $
         zauthUserId

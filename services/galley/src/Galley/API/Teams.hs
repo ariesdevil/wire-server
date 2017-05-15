@@ -6,7 +6,7 @@ module Galley.API.Teams
     ( createTeam
     , getTeam
     , getManyTeams
-    --, deleteTeam
+    , deleteTeam
     , addTeamMember
     , getTeamMembers
     , deleteTeamMember
@@ -15,7 +15,7 @@ module Galley.API.Teams
 
 import Cassandra (result, hasMore)
 import Control.Lens
-import Control.Monad (unless)
+import Control.Monad (unless, when)
 import Control.Monad.Catch
 import Data.ByteString.Conversion
 import Data.Foldable (for_)
@@ -35,6 +35,7 @@ import Network.Wai.Utilities
 import Prelude hiding (head, mapM)
 
 import qualified Galley.Data as Data
+import qualified Galley.Data.Types as Data
 
 getTeam :: UserId ::: TeamId ::: JSON -> Galley Response
 getTeam (zusr::: tid ::: _) =
@@ -49,7 +50,7 @@ getManyTeams (zusr ::: range ::: size ::: _) =
 lookupTeam :: UserId -> TeamId -> Galley (Maybe Team)
 lookupTeam zusr tid = do
     _ <- Data.teamMember tid zusr >>= ifNothing teamNotFound
-    Data.team tid
+    fmap Data.tdTeam <$> Data.team tid
 
 createTeam :: UserId ::: Request ::: JSON -> Galley Response
 createTeam (zusr::: req ::: _) = do
@@ -64,8 +65,15 @@ createTeam (zusr::: req ::: _) = do
         Data.addTeamMember (team^.teamId)
     pure (empty & setStatus status201 . location (team^.teamId))
 
---deleteTeam :: UserId ::: TeamId ::: JSON -> Galley Response
---deleteTeam (zusr::: tid ::: _) = undefined
+deleteTeam :: UserId ::: TeamId ::: JSON -> Galley Response
+deleteTeam (zusr::: tid ::: _) = do
+    alive <- Data.isTeamAlive tid
+    when alive $ do
+        m <- Data.teamMember tid zusr >>= ifNothing teamNotFound
+        unless (m `hasPermission` DeleteTeam) $
+            throwM (operationDenied DeleteTeam)
+    Data.deleteTeam tid
+    pure empty
 
 getTeamMembers :: UserId ::: TeamId ::: JSON -> Galley Response
 getTeamMembers (zusr::: tid ::: _) = do
@@ -95,8 +103,8 @@ deleteTeamMember (zusr::: tid ::: remove ::: _) = do
         throwM (operationDenied RemoveTeamMember)
     Data.removeTeamMember tid remove
     cc <- filter (view managedConversation) <$> Data.teamConversations tid
-    for_ cc $ \c ->
-        Data.removeMember remove (c^.conversationId)
+    for_ cc $
+        Data.removeMember remove . view conversationId
     pure empty
 
 getTeamConversations :: UserId ::: TeamId ::: JSON -> Galley Response

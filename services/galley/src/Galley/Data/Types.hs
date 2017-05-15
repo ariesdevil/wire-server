@@ -6,13 +6,17 @@ module Galley.Data.Types
     , isSelfConv
     , isO2OConv
     , isTeamConv
+    , isConvDeleted
+
+    , TeamData (..)
     ) where
 
 import Data.Id
 import Data.List1
 import Data.Text
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust)
 import Galley.Types (ConvType (..), Access, Member (..))
+import Galley.Types.Teams (Team)
 
 data Conversation = Conversation
     { convId      :: ConvId
@@ -22,6 +26,7 @@ data Conversation = Conversation
     , convAccess  :: List1 Access
     , convMembers :: [Member]
     , convTeam    :: Maybe TeamId
+    , convDeleted :: Maybe Bool
     } deriving (Eq, Show)
 
 isSelfConv :: Conversation -> Bool
@@ -33,3 +38,10 @@ isO2OConv = (One2OneConv ==) . convType
 isTeamConv :: Conversation -> Bool
 isTeamConv = isJust . convTeam
 
+isConvDeleted :: Conversation -> Bool
+isConvDeleted = fromMaybe False . convDeleted
+
+data TeamData = TeamData
+    { tdTeam    :: Team
+    , tdDeleted :: Bool
+    }

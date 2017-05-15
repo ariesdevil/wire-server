@@ -20,8 +20,8 @@ import qualified Data.Text.Lazy as LT
 
 -- Teams --------------------------------------------------------------------
 
-selectTeam :: PrepQuery R (Identity TeamId) (UserId, Text, Text, Maybe Text)
-selectTeam = "select creator, name, icon, icon_key from team where team = ?"
+selectTeam :: PrepQuery R (Identity TeamId) (UserId, Text, Text, Maybe Text, Bool)
+selectTeam = "select creator, name, icon, icon_key, deleted from team where team = ?"
 
 selectTeamConv :: PrepQuery R (TeamId, ConvId) (Identity Bool)
 selectTeamConv = "select managed from team_conv where team = ? and conv = ?"
@@ -45,7 +45,7 @@ selectUserTeamsFrom :: PrepQuery R (UserId, TeamId) (Identity TeamId)
 selectUserTeamsFrom = "select team from user_team where user = ? and team > ? order by team"
 
 insertTeam :: PrepQuery W (TeamId, UserId, Text, Text, Maybe Text) ()
-insertTeam = "insert into team (team, creator, name, icon, icon_key) values (?, ?, ?, ?, ?)"
+insertTeam = "insert into team (team, creator, name, icon, icon_key, deleted) values (?, ?, ?, ?, ?, false)"
 
 insertTeamConv :: PrepQuery W (TeamId, ConvId, Bool) ()
 insertTeamConv = "insert into team_conv (team, conv, managed) values (?, ?, ?)"
@@ -68,13 +68,22 @@ insertUserTeam = "insert into user_team (user, team) values (?, ?)"
 deleteUserTeam :: PrepQuery W (UserId, TeamId) ()
 deleteUserTeam = "delete from user_team where user = ? and team = ?"
 
+markTeamDeleted :: PrepQuery W (Identity TeamId) ()
+markTeamDeleted = "update team set deleted = true where team = ?"
+
+deleteTeam :: PrepQuery W (Identity TeamId) ()
+deleteTeam = "delete from team using timestamp 32503680000000000 where team = ?"
+
 -- Conversations ------------------------------------------------------------
 
-selectConv :: PrepQuery R (Identity ConvId) (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId)
-selectConv = "select type, creator, access, name, team from conversation where conv = ?"
+selectConv :: PrepQuery R (Identity ConvId) (ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId, Maybe Bool)
+selectConv = "select type, creator, access, name, team, deleted from conversation where conv = ?"
 
-selectConvs :: PrepQuery R (Identity [ConvId]) (ConvId, ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId)
-selectConvs = "select conv, type, creator, access, name, team from conversation where conv in ?"
+selectConvs :: PrepQuery R (Identity [ConvId]) (ConvId, ConvType, UserId, Maybe (Set Access), Maybe Text, Maybe TeamId, Maybe Bool)
+selectConvs = "select conv, type, creator, access, name, team, deleted from conversation where conv in ?"
+
+isConvDeleted :: PrepQuery R (Identity ConvId) (Identity (Maybe Bool))
+isConvDeleted = "select deleted from conversation where conv = ?"
 
 insertConv :: PrepQuery W (ConvId, ConvType, UserId, Set Access, Maybe Text, Maybe TeamId) ()
 insertConv = "insert into conversation (conv, type, creator, access, name, team) values (?, ?, ?, ?, ?, ?)"
@@ -84,6 +93,12 @@ updateConvName = "update conversation set name = ? where conv = ?"
 
 updateConvType :: PrepQuery W (ConvType, ConvId) ()
 updateConvType = "update conversation set type = ? where conv = ?"
+
+deleteConv :: PrepQuery W (Identity ConvId) ()
+deleteConv = "delete from conversation using timestamp 32503680000000000 where conv = ?"
+
+markConvDeleted :: PrepQuery W (Identity ConvId) ()
+markConvDeleted = "update conversation set deleted = true where conv = ?"
 
 -- User Conversations -------------------------------------------------------
 

@@ -68,6 +68,7 @@ import Prelude hiding (any, elem, head)
 import qualified Data.Map.Strict      as Map
 import qualified Data.Set             as Set
 import qualified Galley.Data          as Data
+import qualified Galley.Data.Types    as Data
 import qualified Galley.External      as External
 import qualified Galley.Types.Clients as Clients
 import qualified Galley.Types.Proto   as Proto
@@ -75,6 +76,9 @@ import qualified Galley.Types.Proto   as Proto
 acceptConv :: UserId ::: Maybe ConnId ::: ConvId -> Galley Response
 acceptConv (usr ::: conn ::: cnv) = do
     conv  <- Data.conversation cnv >>= ifNothing convNotFound
+    when (Data.isConvDeleted conv) $ do
+        Data.deleteConversation cnv
+        throwM convNotFound
     conv' <- acceptOne2One usr conv conn
     setStatus status200 . json <$> conversationView usr conv'
 
@@ -99,6 +103,9 @@ unblockConv (usr ::: conn ::: cnv) = do
 joinConversation :: UserId ::: ConnId ::: ConvId ::: JSON -> Galley Response
 joinConversation (zusr ::: zcon ::: cnv ::: _) = do
     c <- Data.conversation cnv >>= ifNothing convNotFound
+    when (Data.isConvDeleted c) $ do
+        Data.deleteConversation cnv
+        throwM convNotFound
     unless (LinkAccess `elem` Data.convAccess c) $
         throwM convNotFound
     let new = filter (notIsMember c) [zusr]
@@ -109,6 +116,9 @@ addMembers :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Respon
 addMembers (zusr ::: zcon ::: cid ::: req ::: _) = do
     body <- fromBody req invalidPayload
     conv <- Data.conversation cid >>= ifNothing convNotFound
+    when (Data.isConvDeleted conv) $ do
+        Data.deleteConversation cid
+        throwM convNotFound
     let mems = botsAndUsers (Data.convMembers conv)
     to_add <- rangeChecked (toList $ invUsers body) :: Galley (Range 1 128 [UserId])
     let new_users = filter (notIsMember conv) (fromRange to_add)
@@ -131,17 +141,21 @@ addMembers (zusr ::: zcon ::: cid ::: req ::: _) = do
         tms <- Data.teamMembers tid
         permissionCheck zusr AddConversationMember tms
         tcv <- Data.teamConversation tid cid
-        when (maybe False (view managedConversation) tcv) $
+        when (maybe True (view managedConversation) tcv) $
             throwM (invalidOp "Users can not be added to managed conversations.")
         ensureMemberLimit (toList $ Data.convMembers conv) new_users
         ensureConnected zusr (notSameTeam (fromRange to_add) tms)
 
 updateMember :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Response
 updateMember (zusr ::: zcon ::: cid ::: req ::: _) = do
-    j   <- fromBody req invalidPayload
-    m   <- Data.member cid zusr >>= ifNothing convNotFound
-    up  <- Data.updateMember cid zusr j
-    now <- liftIO getCurrentTime
+    alive <- Data.isConvAlive cid
+    unless alive $ do
+        Data.deleteConversation cid
+        throwM convNotFound
+    body <- fromBody req invalidPayload
+    m    <- Data.member cid zusr >>= ifNothing convNotFound
+    up   <- Data.updateMember cid zusr body
+    now  <- liftIO getCurrentTime
     let e = Event MemberStateUpdate cid zusr now (Just $ EdMemberUpdate up)
     let ms = applyChanges m up
     for_ (newPush e [recipient ms]) $ \p ->
@@ -163,6 +177,9 @@ updateMember (zusr ::: zcon ::: cid ::: req ::: _) = do
 removeMember :: UserId ::: ConnId ::: ConvId ::: UserId -> Galley Response
 removeMember (zusr ::: zcon ::: cid ::: victim) = do
     conv <- Data.conversation cid >>= ifNothing convNotFound
+    when (Data.isConvDeleted conv) $ do
+        Data.deleteConversation cid
+        throwM convNotFound
     let (bots, users) = botsAndUsers (Data.convMembers conv)
     case Data.convTeam conv of
         Nothing -> regularConvChecks users
@@ -237,14 +254,18 @@ postNewOtrMessage usr con cnv val msg = do
 
 updateConversation :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Response
 updateConversation (zusr ::: zcon ::: cnv ::: req ::: _) = do
-    j <- fromBody req invalidPayload
+    body <- fromBody req invalidPayload
+    alive <- Data.isConvAlive cnv
+    unless alive $ do
+        Data.deleteConversation cnv
+        throwM convNotFound
     (bots, users) <- botsAndUsers <$> Data.members cnv
     unless (zusr `isMember` users) $
         throwM convNotFound
     now <- liftIO getCurrentTime
-    cn  <- rangeChecked (cupName j)
+    cn  <- rangeChecked (cupName body)
     Data.updateConversation cnv cn
-    let e = Event ConvRename cnv zusr now (Just $ EdConvRename j)
+    let e = Event ConvRename cnv zusr now (Just $ EdConvRename body)
     for_ (newPush e (recipient <$> users)) $ \p ->
         push1 $ p & pushConn ?~ zcon
     void . fork $ void $ External.deliver (bots `zip` repeat e)
@@ -252,12 +273,12 @@ updateConversation (zusr ::: zcon ::: cnv ::: req ::: _) = do
 
 isTyping :: UserId ::: ConnId ::: ConvId ::: Request ::: JSON -> Galley Response
 isTyping (zusr ::: zcon ::: cnv ::: req ::: _) = do
-    j   <- fromBody req invalidPayload
-    mm  <- Data.members cnv
+    body <- fromBody req invalidPayload
+    mm   <- Data.members cnv
     unless (zusr `isMember` mm) $
         throwM convNotFound
     now <- liftIO getCurrentTime
-    let e = Event Typing cnv zusr now (Just $ EdTyping j)
+    let e = Event Typing cnv zusr now (Just $ EdTyping body)
     for_ (newPush e (recipient <$> mm)) $ \p ->
         push1 $ p
               & pushConn      ?~ zcon
@@ -279,6 +300,9 @@ addBot :: UserId ::: ConnId ::: Request ::: JSON -> Galley Response
 addBot (zusr ::: zcon ::: req ::: _) = do
     b <- fromBody req invalidPayload
     c <- Data.conversation (b^.addBotConv) >>= ifNothing convNotFound
+    when (Data.isConvDeleted c) $ do
+        Data.deleteConversation (b^.addBotConv)
+        throwM convNotFound
     let (bots, users) = botsAndUsers (Data.convMembers c)
     unless (zusr `isMember` users) $
         throwM convNotFound
@@ -297,6 +321,9 @@ rmBot :: UserId ::: Maybe ConnId ::: Request ::: JSON -> Galley Response
 rmBot (zusr ::: zcon ::: req ::: _) = do
     b <- fromBody req invalidPayload
     c <- Data.conversation (b^.rmBotConv) >>= ifNothing convNotFound
+    when (Data.isConvDeleted c) $ do
+        Data.deleteConversation (b^.rmBotConv)
+        throwM convNotFound
     unless (zusr `isMember` Data.convMembers c) $
         throwM convNotFound
     let (bots, users) = botsAndUsers (Data.convMembers c)
@@ -374,6 +401,10 @@ withValidOtrRecipients
     -> ([(Member, ClientId, Text)] -> Galley ())
     -> Galley Response
 withValidOtrRecipients usr clt cnv rcps val now go = do
+    alive <- Data.isConvAlive cnv
+    unless alive $ do
+        Data.deleteConversation cnv
+        throwM convNotFound
     membs <- Data.members cnv
     clts  <- Data.lookupClients (map memId membs)
     case checkOtrRecipients usr clt rcps membs clts val now of

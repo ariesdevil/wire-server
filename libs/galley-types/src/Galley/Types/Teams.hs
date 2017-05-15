@@ -124,6 +124,7 @@ data Perm =
     | SetTeamData
     | GetMemberPermissions
     | GetTeamConversations
+    | DeleteTeam
     deriving (Eq, Ord, Show)
 
 data NewTeam = NewTeam
@@ -194,6 +195,7 @@ permToInt SetBilling               = 0x080
 permToInt SetTeamData              = 0x100
 permToInt GetMemberPermissions     = 0x200
 permToInt GetTeamConversations     = 0x400
+permToInt DeleteTeam               = 0x800
 
 intToPerm :: Word64 -> Maybe Perm
 intToPerm 0x001 = Just CreateConversation
@@ -207,6 +209,7 @@ intToPerm 0x080 = Just SetBilling
 intToPerm 0x100 = Just SetTeamData
 intToPerm 0x200 = Just GetMemberPermissions
 intToPerm 0x400 = Just GetTeamConversations
+intToPerm 0x800 = Just DeleteTeam
 intToPerm _     = Nothing
 
 intToPerms :: Word64 -> Set Perm
